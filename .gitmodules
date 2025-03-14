@@ -1,0 +1,3 @@
+[submodule "rwkv.cpp"]
+	path = rwkv.cpp
+	url = git@github.com:christianazinn/rwkv.cpp.git
