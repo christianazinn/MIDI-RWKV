@@ -19,29 +19,25 @@ if __name__ == "__main__":
     parser.add_argument("--wandb", default="", type=str)  # wandb project name. if "" then don't use wandb
     parser.add_argument("--proj_dir", default="out", type=str)
     parser.add_argument("--random_seed", default="-1", type=int)
-    parser.add_argument("--train_type", default="", type=str) # ""/"states"
 
-    parser.add_argument("--data_file", default="", type=str)
-    parser.add_argument("--data_type", default="utf-8", type=str)
+    # TODO configure data input
+    # TODO this should be set automatically from your tokenizer!!!
     parser.add_argument("--vocab_size", default=0, type=int)  # vocab_size = 0 means auto (for char-level LM and .txt data)
 
     parser.add_argument("--ctx_len", default=1024, type=int)
-    parser.add_argument("--epoch_steps", default=1000, type=int)  # a mini "epoch" has [epoch_steps] steps
-    parser.add_argument("--epoch_count", default=500, type=int)  # train for this many "epochs". will continue afterwards with lr = lr_final
-    parser.add_argument("--epoch_begin", default=0, type=int)  # if you load a model trained for x "epochs", set epoch_begin = x
-    parser.add_argument("--epoch_save", default=5, type=int)  # save the model every [epoch_save] "epochs"
+    parser.add_argument("--max_epochs", default=100, type=int)  # train for this many epochs
+
+    parser.add_argument("--epoch_save", default=5, type=int)  # save the model every [epoch_save] epochs
+    parser.add_argument("--save-steps", default=0, type=int)  # save the model every [save_steps] steps
 
     parser.add_argument("--micro_bsz", default=12, type=int)  # micro batch size (batch size per GPU)
-    parser.add_argument("--n_layer", default=6, type=int)
-    parser.add_argument("--n_embd", default=512, type=int)
-    parser.add_argument("--dim_att", default=0, type=int)
-    parser.add_argument("--dim_ffn", default=0, type=int)
-    parser.add_argument("--pre_ffn", default=0, type=int)  # replace first att layer by ffn (sometimes better)
-    parser.add_argument("--head_qk", default=0, type=int)  # my headQK trick
-    parser.add_argument("--tiny_att_dim", default=0, type=int)  # tiny attention dim
-    parser.add_argument("--tiny_att_layer", default=-999, type=int)  # tiny attention @ which layer
+    parser.add_argument("--n_layer", default=6, type=int)  # self explanatory
+    parser.add_argument("--n_embd", default=512, type=int)  # self explanatory
+    parser.add_argument("--dim_att", default=0, type=int)  # will default to n_embd
+    parser.add_argument("--dim_ffn", default=0, type=int)  # will default to 3.5x n_embd
+    parser.add_argument("--", default=0, type=int)  # headQK trick
 
-    parser.add_argument("--lr_init", default=6e-4, type=float)  # 6e-4 for L12-D768, 4e-4 for L24-D1024, 3e-4 for L24-D2048
+    parser.add_argument("--lr_init", default=6e-4, type=float)  # 6e-4 for L12-D768, 4e-4 for L24-D1024, 3e-4 for L24-D2048, generally play around with this and use higher lr for larger models
     parser.add_argument("--lr_final", default=1e-5, type=float)
     parser.add_argument("--warmup_steps", default=-1, type=int)  # try 20 if you load a model
     parser.add_argument("--beta1", default=0.9, type=float)
@@ -53,33 +49,20 @@ if __name__ == "__main__":
     parser.add_argument("--weight_decay_final", default=-1, type=float)
     parser.add_argument("--grad_clip", default=1.0, type=float) # reduce it to 0.7 / 0.5 / 0.3 / 0.2 for problematic samples
 
-    parser.add_argument("--my_pile_version", default=1, type=int)  # my special pile version
-    parser.add_argument("--my_pile_stage", default=0, type=int)  # my special pile mode
-    parser.add_argument("--my_pile_shift", default=-1, type=int)  # my special pile mode - text shift
-    parser.add_argument("--my_pile_edecay", default=0, type=int)
     parser.add_argument("--layerwise_lr", default=1, type=int)  # layerwise lr for faster convergence (but slower it/s)
     parser.add_argument("--ds_bucket_mb", default=200, type=int)  # deepspeed bucket size in MB. 200 seems enough
 
-    parser.add_argument("--my_sample_len", default=0, type=int)
-    parser.add_argument("--my_ffn_shift", default=1, type=int)
-    parser.add_argument("--my_att_shift", default=1, type=int)
     parser.add_argument("--head_size_a", default=64, type=int) # can try larger values for larger models
+    parser.add_argument("--chunk-len", default=16, type=int) # chunk length for RWKV
     parser.add_argument("--head_size_divisor", default=8, type=int)
-    parser.add_argument("--my_pos_emb", default=0, type=int)
     parser.add_argument("--load_partial", default=0, type=int)
-    parser.add_argument("--magic_prime", default=0, type=int)
-    parser.add_argument("--my_qa_mask", default=0, type=int)
-    parser.add_argument("--my_random_steps", default=0, type=int)
-    parser.add_argument("--my_testing", default='x052', type=str)
-    parser.add_argument("--my_exit", default=99999999, type=int)
-    parser.add_argument("--my_exit_tokens", default=0, type=int)
 
-    parser.add_argument("--accelerator", default="gpu", type=str)
-    parser.add_argument("--strategy", default="auto", type=str)
-    parser.add_argument("--devices", default=1, type=int)
-    parser.add_argument("--num_nodes", default=1, type=int)
-    parser.add_argument("--precision", default="fp16", type=str)
-    parser.add_argument("--accumulate_grad_batches", default=1, type=int)
+    # --num_nodes 1
+    # --accelerator gpu
+    # --devices 1
+    # --precision bf16
+    # --strategy deepspeed_stage_2
+
     args = parser.parse_args()
 
     ########################################################################################################
@@ -88,8 +71,7 @@ if __name__ == "__main__":
     import numpy as np
     import torch
     from torch.utils.data import DataLoader
-    if "deepspeed" in args.strategy:
-        import deepspeed
+    import deepspeed
     from pytorch_lightning import seed_everything
 
     if args.random_seed >= 0:
@@ -108,79 +90,20 @@ if __name__ == "__main__":
     args.num_sanity_val_steps = 0
     args.check_val_every_n_epoch = int(1e20)
     args.log_every_n_steps = int(1e20)
-    args.max_epochs = -1  # continue forever
     args.betas = (args.beta1, args.beta2)
     args.real_bsz = int(args.num_nodes) * int(args.devices) * args.micro_bsz
-    os.environ["RWKV_MY_TESTING"] = args.my_testing
     os.environ["RWKV_CTXLEN"] = str(args.ctx_len)
     os.environ["RWKV_HEAD_SIZE_A"] = str(args.head_size_a)
-    os.environ["RWKV_TRAIN_TYPE"] = args.train_type
+    os.environ["RWKV_CHUNK_LEN"] = str(args.chunk_len)
     if args.dim_att <= 0:
         args.dim_att = args.n_embd
     if args.dim_ffn <= 0:
-        if '-f4' in os.environ["RWKV_MY_TESTING"]:
-            args.dim_ffn = int((args.n_embd * 4) // 32 * 32)
-        else:
-            args.dim_ffn = int((args.n_embd * 3.5) // 32 * 32) # default = 3.5x emb size
+        args.dim_ffn = int((args.n_embd * 3.5) // 32 * 32) # default = 3.5x emb size
 
-    if args.data_type == "wds_img":
-        args.run_name = f"v{args.my_img_version}-{args.my_img_size}-{args.my_img_bit}bit-{args.my_img_clip}x{args.my_img_clip_scale}"
-        args.proj_dir = f"{args.proj_dir}-{args.run_name}"
-    else:
-        args.run_name = f"{args.vocab_size} ctx{args.ctx_len} L{args.n_layer} D{args.n_embd}"
+    args.run_name = f"{args.vocab_size} ctx{args.ctx_len} L{args.n_layer} D{args.n_embd}"
     if not os.path.exists(args.proj_dir):
         os.makedirs(args.proj_dir)
 
-    if args.my_pile_stage > 0:
-        magic_prime_bak = args.magic_prime
-
-        if args.my_pile_shift < 0:
-            args.my_pile_shift = 0
-
-        if magic_prime_bak > 0:
-            args.magic_prime = magic_prime_bak
-        if args.my_qa_mask == 2:
-            args.epoch_count = 2 * args.magic_prime // 40320
-        else:
-            args.epoch_count = args.magic_prime // 40320
-
-        args.epoch_steps = 40320 // args.real_bsz
-        assert args.epoch_steps * args.real_bsz == 40320
-        # if args.my_pile_stage == 2:
-        #     assert args.lr_final == args.lr_init
-        if args.my_pile_stage >= 2:  # find latest saved model
-            list_p = []
-            for p in os.listdir(args.proj_dir):
-                if p.startswith("rwkv") and p.endswith(".pth"):
-                    p = ((p.split("-"))[1].split("."))[0]
-                    if p != "final":
-                        if p == "init":
-                            p = -1
-                        else:
-                            p = int(p)
-                        list_p += [p]
-            list_p.sort()
-            max_p = list_p[-1]
-            if len(list_p) > 1:
-                args.my_pile_prev_p = list_p[-2]  # in case max_p is corrupted
-            if max_p == -1:
-                args.load_model = f"{args.proj_dir}/rwkv-init.pth"
-            else:
-                args.load_model = f"{args.proj_dir}/rwkv-{max_p}.pth"
-                if args.warmup_steps < 0:
-                    if args.my_pile_stage == 2:
-                        args.warmup_steps = 10
-                    else:
-                        args.warmup_steps = 30
-            args.epoch_begin = max_p + 1
-
-    samples_per_epoch = args.epoch_steps * args.real_bsz
-    tokens_per_epoch = samples_per_epoch * args.ctx_len
-    try:
-        deepspeed_version = deepspeed.__version__
-    except:
-        deepspeed_version = None
-        pass
     rank_zero_info(
         f"""
 ############################################################################
@@ -189,17 +112,15 @@ if __name__ == "__main__":
 #
 # Data = {args.data_file} ({args.data_type}), ProjDir = {args.proj_dir}
 #
-# Epoch = {args.epoch_begin} to {args.epoch_begin + args.epoch_count - 1} (will continue afterwards), save every {args.epoch_save} epoch
-#
-# Each "epoch" = {args.epoch_steps} steps, {samples_per_epoch} samples, {tokens_per_epoch} tokens
+# Epoch = {args.epoch_begin} to {args.epoch_begin + args.epoch_count - 1}, save every {args.epoch_save} epochs
 #
 # Model = {args.n_layer} n_layer, {args.n_embd} n_embd, {args.ctx_len} ctx_len
 #
 # Adam = lr {args.lr_init} to {args.lr_final}, warmup {args.warmup_steps} steps, beta {args.betas}, eps {args.adam_eps}
 #
 # Found torch {torch.__version__}, recommend latest torch
-# Found deepspeed {deepspeed_version}, recommend latest deepspeed
-# Found pytorch_lightning {pl.__version__}, recommend 1.9.5
+# Found deepspeed {deepspeed.__Version__}, recommend latest deepspeed
+# Found pytorch_lightning {pl.__version__}, REQUIRE 1.9.5
 #
 ############################################################################
 """
@@ -236,6 +157,7 @@ if __name__ == "__main__":
     ########################################################################################################
 
     from trainer import train_callback, generate_init_weight
+    # TODO change me
     from deprecated.dataset import MyDataset
 
     train_data = MyDataset(args)
@@ -244,10 +166,9 @@ if __name__ == "__main__":
     from model import RWKV
     model = RWKV(args)
 
-    if len(args.load_model) == 0 or args.my_pile_stage == 1:  # shall we build the initial weights?
-        init_weight_name = f"{args.proj_dir}/rwkv-init.pth"
-        generate_init_weight(model, init_weight_name)  # save initial weights
-        args.load_model = init_weight_name
+    if len(args.load_model) == 0:  # shall we build the initial weights?
+        args.load_model = f"{args.proj_dir}/rwkv-init.pth"
+        generate_init_weight(model, args.load_model)  # save initial weights
 
     rank_zero_info(f"########## Loading {args.load_model}... ##########")
     try:
@@ -258,16 +179,7 @@ if __name__ == "__main__":
                 load_dict[k.replace('_forward_module.','')] = load_dict[k]
                 del load_dict[k]
     except:
-        rank_zero_info(f"Bad checkpoint {args.load_model}")
-        if args.my_pile_stage >= 2:  # try again using another checkpoint
-            max_p = args.my_pile_prev_p
-            if max_p == -1:
-                args.load_model = f"{args.proj_dir}/rwkv-init.pth"
-            else:
-                args.load_model = f"{args.proj_dir}/rwkv-{max_p}.pth"
-            args.epoch_begin = max_p + 1
-            rank_zero_info(f"Trying {args.load_model}")
-            load_dict = torch.load(args.load_model, map_location="cpu")
+        raise RuntimeError(f"Bad checkpoint {args.load_model}")
 
     state_file = f"{args.proj_dir}/rwkv-init-state.pth"
     if os.path.isfile(state_file):

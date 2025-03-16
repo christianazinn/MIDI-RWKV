@@ -17,7 +17,7 @@ from deepspeed.ops.adam import DeepSpeedCPUAdam, FusedAdam
 from torch.utils.cpp_extension import load
 
 HEAD_SIZE = int(os.environ["RWKV_HEAD_SIZE_A"])
-CHUNK_LEN = 16
+CHUNK_LEN = int(os.environ["RWKV_CHUNK_LEN"])
 
 load(
     name="wind_backstepping",
@@ -78,7 +78,6 @@ class RWKV_Tmix_x070(torch.jit.ScriptModule):
         super().__init__()
         self.args = args
         self.layer_id = layer_id
-        self.my_testing = args.my_testing
 
         self.head_size = args.head_size_a
         self.n_head = args.dim_att // self.head_size
@@ -257,20 +256,9 @@ class Block(nn.Module):
 
         if self.layer_id == 0:
             self.ln0 = nn.LayerNorm(args.n_embd)
-            if args.my_pos_emb > 0:
-                self.pos_emb_x = nn.Parameter(
-                    torch.zeros((1, args.my_pos_emb, args.n_embd))
-                )
-                self.pos_emb_y = nn.Parameter(
-                    torch.zeros((args.my_pos_emb, 1, args.n_embd))
-                )
 
         self.att = RWKV_Tmix_x070(args, layer_id)
         self.ffn = RWKV_CMix_x070(args, layer_id)
-
-        if args.dropout > 0:
-            self.drop0 = nn.Dropout(p=args.dropout)
-            self.drop1 = nn.Dropout(p=args.dropout)
 
     def forward(self, x, v_first):
         if self.layer_id == 0:
@@ -307,33 +295,17 @@ class RWKV(pl.LightningModule):
         if not hasattr(args, "dim_att"):
             args.dim_att = args.n_embd
         if not hasattr(args, "dim_ffn"):
-            if "-f4" in os.environ["RWKV_MY_TESTING"]:
-                args.dim_ffn = int((args.n_embd * 4) // 32 * 32)
-            else:
-                args.dim_ffn = int(
-                    (args.n_embd * 3.5) // 32 * 32
-                )  # default = 3.5x emb size
-        if not hasattr(args, "tiny_att_layer"):
-            args.tiny_att_layer = -1
-        if not hasattr(args, "tiny_att_dim"):
-            args.tiny_att_dim = -1
+            args.dim_ffn = int((args.n_embd * 3.5) // 32 * 32)
         assert args.n_embd % 32 == 0
         assert args.dim_att % 32 == 0
         assert args.dim_ffn % 32 == 0
 
-        self.emb = nn.Embedding(args.vocab_size, args.n_embd)
-
         self.blocks = nn.ModuleList([Block(args, i) for i in range(args.n_layer)])
 
+        self.emb = nn.Embedding(args.vocab_size, args.n_embd)
         self.ln_out = nn.LayerNorm(args.n_embd)
         self.head = nn.Linear(args.n_embd, args.vocab_size, bias=False)
 
-        if args.head_qk > 0:
-            self.head_q = nn.Linear(args.n_embd, args.head_qk, bias=False)
-            self.head_k = nn.Linear(args.n_embd, args.head_qk, bias=False)
-            self.register_buffer(
-                "copy_mask", torch.tril(torch.ones(args.ctx_len, args.ctx_len))
-            )
         if args.dropout > 0:
             self.drop0 = nn.Dropout(p=args.dropout)
 
@@ -345,10 +317,6 @@ class RWKV(pl.LightningModule):
         lr_2x = set()
         lr_3x = set()
         for n, p in self.named_parameters():
-            if args.train_type == "states":
-                if "time_sta" not in n:
-                    continue
-
             if (("_w1" in n) or ("_w2" in n)) and (args.layerwise_lr > 0):
                 lr_1x.add(n)
             elif ("time_sta" in n) and (args.weight_decay > 0):
@@ -467,69 +435,27 @@ class RWKV(pl.LightningModule):
         assert T <= args.ctx_len, "Cannot forward, model ctx_len is exhausted."
 
         x = self.emb(idx)
-        x_emb = x
 
         if args.dropout > 0:
             x = self.drop0(x)
-        if args.tiny_att_dim > 0:
-            for block in self.blocks:
-                if args.grad_cp == 1:
-                    x = deepspeed.checkpointing.checkpoint(block, x, x_emb)
-                else:
-                    x = block(x, x_emb)
-        else:
-            v_first = torch.empty_like(x)
-            for block in self.blocks:
-                if args.grad_cp == 1:
-                    x, v_first = deepspeed.checkpointing.checkpoint(
-                        block, x, v_first
-                    )
-                else:
-                    x, v_first = block(x, v_first)
+        v_first = torch.empty_like(x)
+        for block in self.blocks:
+            if args.grad_cp == 1:
+                x, v_first = deepspeed.checkpointing.checkpoint(
+                    block, x, v_first
+                )
+            else:
+                x, v_first = block(x, v_first)
 
         x = self.ln_out(x)
-
-        if args.head_qk > 0:
-            q = self.head_q(x)[:, :T, :]
-            k = self.head_k(x)[:, :T, :]
-            c = (q @ k.transpose(-2, -1)) * (1.0 / args.head_qk)
-            c = c.masked_fill(self.copy_mask[:T, :T] == 0, 0)
-
-            if "32" in os.environ["RWKV_FLOAT_MODE"]:
-                c = c @ F.one_hot(idx, num_classes=args.vocab_size)
-            elif os.environ["RWKV_FLOAT_MODE"] == "fp16":
-                c = c @ F.one_hot(idx, num_classes=args.vocab_size).half()
-            elif os.environ["RWKV_FLOAT_MODE"] == "bf16":
-                c = c @ F.one_hot(idx, num_classes=args.vocab_size).bfloat16()
-
-            x = self.head(x) + c
-        else:
-            x = self.head(x)
+        x = self.head(x)
 
         return x
 
     def training_step(self, batch, batch_idx):
-        args = self.args
-        if args.my_qa_mask != 1:
-            idx, targets = batch
-            logits = self(idx)
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
-        else:
-            idx, targets, mask = batch
-            mask = mask.view(-1)
-            sum_mask = torch.sum(mask).item()
-
-            logits = self(idx)
-            if sum_mask == mask.shape[0]:
-                loss = F.cross_entropy(
-                    logits.view(-1, logits.size(-1)), targets.view(-1)
-                )
-            else:
-                loss = F.cross_entropy(
-                    logits.view(-1, logits.size(-1)), targets.view(-1), reduction="none"
-                )
-                loss = torch.sum(loss * mask) / sum_mask
-
+        idx, targets = batch
+        logits = self(idx)
+        loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
         return L2Wrap.apply(loss, logits)
 
     def training_step_end(self, batch_parts):
@@ -558,7 +484,6 @@ class RWKV(pl.LightningModule):
                 or ".ln" in n
                 or "time_" in n
                 or "_mask" in n
-                or "pos_emb" in n
                 or ".mask." in n
                 or n.endswith("_w")
                 or n.endswith("_w1")

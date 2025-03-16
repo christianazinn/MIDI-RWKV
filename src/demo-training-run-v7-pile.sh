@@ -28,7 +28,6 @@ BETA_2="0.99"
 ADAM_EPS="1e-18"
 #
 GRAD_CP=1 # 1 => slower, save VRAM; 0 => faster, more VRAM
-EPOCH_SAVE=50 # save every 50 "miniepochs" (1 miniepoch = 40320 * ctx_len tokens) => decrease if your GPU is weak
 #
 #######################################################################################################################
 #
@@ -43,29 +42,20 @@ python train.py \
   --proj_dir $PROJ_DIR \
   --my_testing $MODEL_TYPE \
   --ctx_len $CTX_LEN \
-  --my_pile_stage 3 \
-  --epoch_count 999999 \
+  --max_epochs 999999 \
   --epoch_begin 0 \
-  --data_file "data/minipile" \
-  --my_exit_tokens 1498226207 \
-  --magic_prime 2926181 \
   --num_nodes $N_NODE \
   --micro_bsz $M_BSZ \
   --n_layer $N_LAYER \
   --n_embd $N_EMBD \
-  --pre_ffn 0 \
-  --head_qk 0 \
   --lr_init $LR_INIT \
   --lr_final $LR_FINAL \
   --warmup_steps 10 \
   --beta1 0.9 \
   --beta2 $BETA_2 \
   --adam_eps $ADAM_EPS \
-  --my_pile_edecay 0 \
-  --data_type "binidx" \
   --vocab_size 65536 \
   --weight_decay $W_DECAY \
-  --epoch_save $EPOCH_SAVE \
   --head_size_a 64 \
   --accelerator gpu \
   --devices $GPU_PER_NODE \
