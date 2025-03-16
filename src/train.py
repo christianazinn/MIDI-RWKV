@@ -8,7 +8,7 @@ logging.basicConfig(level=logging.INFO)
 if __name__ == "__main__":
     from argparse import ArgumentParser
     from pytorch_lightning import Trainer
-    from pytorch_lightning.utilities import rank_zero_info, rank_zero_only
+    from pytorch_lightning.utilities import rank_zero_info
     import pytorch_lightning as pl
 
     rank_zero_info("########## work in progress ##########")
@@ -74,20 +74,17 @@ if __name__ == "__main__":
     parser.add_argument("--my_exit", default=99999999, type=int)
     parser.add_argument("--my_exit_tokens", default=0, type=int)
 
-    if pl.__version__[0]=='2':
-        parser.add_argument("--accelerator", default="gpu", type=str)
-        parser.add_argument("--strategy", default="auto", type=str)
-        parser.add_argument("--devices", default=1, type=int)
-        parser.add_argument("--num_nodes", default=1, type=int)
-        parser.add_argument("--precision", default="fp16", type=str)
-        parser.add_argument("--accumulate_grad_batches", default=1, type=int)
-    else:
-        parser = Trainer.add_argparse_args(parser)
+    parser.add_argument("--accelerator", default="gpu", type=str)
+    parser.add_argument("--strategy", default="auto", type=str)
+    parser.add_argument("--devices", default=1, type=int)
+    parser.add_argument("--num_nodes", default=1, type=int)
+    parser.add_argument("--precision", default="fp16", type=str)
+    parser.add_argument("--accumulate_grad_batches", default=1, type=int)
     args = parser.parse_args()
 
     ########################################################################################################
 
-    import os, warnings, math, datetime, sys, time
+    import os, warnings, datetime
     import numpy as np
     import torch
     from torch.utils.data import DataLoader
@@ -102,7 +99,6 @@ if __name__ == "__main__":
     np.set_printoptions(precision=4, suppress=True, linewidth=200)
     warnings.filterwarnings("ignore", ".*Consider increasing the value of the `num_workers` argument*")
     warnings.filterwarnings("ignore", ".*The progress bar already tracks a metric with the*")
-    # os.environ["WDS_SHOW_SEED"] = "1"
 
     args.my_timestamp = datetime.datetime.today().strftime("%Y-%m-%d-%H-%M-%S")
     args.enable_checkpointing = False
@@ -189,7 +185,7 @@ if __name__ == "__main__":
         f"""
 ############################################################################
 #
-# RWKV-5 {args.precision.upper()} on {args.num_nodes}x{args.devices} {args.accelerator.upper()}, bsz {args.num_nodes}x{args.devices}x{args.micro_bsz}={args.real_bsz}, {args.strategy} {'with grad_cp' if args.grad_cp > 0 else ''}
+# RWKV-7 {args.precision.upper()} on {args.num_nodes}x{args.devices} {args.accelerator.upper()}, bsz {args.num_nodes}x{args.devices}x{args.micro_bsz}={args.real_bsz}, {args.strategy} {'with grad_cp' if args.grad_cp > 0 else ''}
 #
 # Data = {args.data_file} ({args.data_type}), ProjDir = {args.proj_dir}
 #
@@ -210,8 +206,6 @@ if __name__ == "__main__":
     )
     rank_zero_info(str(vars(args)) + "\n")
 
-    assert args.data_type in ["utf-8", "utf-16le", "numpy", "binidx", "dummy", "uint16"]
-
     if args.lr_final == 0 or args.lr_init == 0:
         rank_zero_info("\n\nNote: lr_final = 0 or lr_init = 0. Using linear LR schedule instead.\n\n")
 
@@ -222,10 +216,6 @@ if __name__ == "__main__":
             rank_zero_info("\n\nNote: you are using fp32 (very slow). Try bf16 / tf32 for faster training.\n\n")
     if args.precision == "fp16":
         rank_zero_info("\n\nNote: you are using fp16 (might overflow). Try bf16 / tf32 for stable training.\n\n")
-
-    os.environ["RWKV_JIT_ON"] = "1"
-    if "deepspeed_stage_3" in args.strategy:
-        os.environ["RWKV_JIT_ON"] = "0"
 
     torch.backends.cudnn.benchmark = True
     torch.backends.cudnn.enabled = True
@@ -245,13 +235,13 @@ if __name__ == "__main__":
 
     ########################################################################################################
 
-    from src.trainer import train_callback, generate_init_weight
-    from src.dataset import MyDataset
+    from trainer import train_callback, generate_init_weight
+    from deprecated.dataset import MyDataset
 
     train_data = MyDataset(args)
     args.vocab_size = train_data.vocab_size
 
-    from src.model import RWKV
+    from model import RWKV
     model = RWKV(args)
 
     if len(args.load_model) == 0 or args.my_pile_stage == 1:  # shall we build the initial weights?
@@ -293,15 +283,10 @@ if __name__ == "__main__":
                 load_dict[k] = model.state_dict()[k]
     model.load_state_dict(load_dict)
 
-    if pl.__version__[0]=='2':
-        trainer = Trainer(accelerator=args.accelerator,strategy=args.strategy,devices=args.devices,num_nodes=args.num_nodes,precision=args.precision,
-        logger=args.logger,callbacks=[train_callback(args)],max_epochs=args.max_epochs,check_val_every_n_epoch=args.check_val_every_n_epoch,num_sanity_val_steps=args.num_sanity_val_steps,
-        log_every_n_steps=args.log_every_n_steps,enable_checkpointing=args.enable_checkpointing,accumulate_grad_batches=args.accumulate_grad_batches,gradient_clip_val=args.gradient_clip_val)
-    else:
-        trainer = Trainer.from_argparse_args(
-            args,
-            callbacks=[train_callback(args)],
-        )
+    trainer = Trainer.from_argparse_args(
+        args,
+        callbacks=[train_callback(args)],
+    )
 
     if trainer.global_rank == 0:
         for n in model.state_dict():
@@ -318,13 +303,5 @@ if __name__ == "__main__":
 
     # must set shuffle=False, persistent_workers=False (because worker is in another thread)
     data_loader = DataLoader(train_data, shuffle=False, pin_memory=True, batch_size=args.micro_bsz, num_workers=1, persistent_workers=False, drop_last=True)
-
-    # if args.train_type == 'states':
-    #     model.requires_grad_(False)
-    #     for name, module in model.named_modules():
-    #         for pname, param in module.named_parameters():
-    #             if pname.endswith('.time_state') and pname.startswith('blocks.'):
-    #                 print(pname)
-    #                 param.requires_grad = True
 
     trainer.fit(model, data_loader)

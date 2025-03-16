@@ -1,8 +1,4 @@
-########################################################################################################
-# The RWKV Language Model - https://github.com/BlinkDL/RWKV-LM
-########################################################################################################
-
-import os, math, gc, importlib
+import os, math, gc
 import torch
 
 import torch.nn as nn
@@ -12,17 +8,6 @@ from pytorch_lightning.strategies import DeepSpeedStrategy
 
 import deepspeed
 from deepspeed.ops.adam import DeepSpeedCPUAdam, FusedAdam
-
-def __nop(ob):
-    return ob
-
-
-MyModule = nn.Module
-MyFunction = __nop
-# TODO: you should enable jit!
-if os.environ["RWKV_JIT_ON"] == "1":
-    MyModule = torch.jit.ScriptModule
-    MyFunction = torch.jit.script_method
 
 
 ########################################################################################################
@@ -88,7 +73,7 @@ def RUN_CUDA_RWKV7g(q, w, k, v, a, b):
 ########################################################################################################
 
 
-class RWKV_Tmix_x070(MyModule):
+class RWKV_Tmix_x070(torch.jit.ScriptModule):
     def __init__(self, args, layer_id):
         super().__init__()
         self.args = args
@@ -187,7 +172,7 @@ class RWKV_Tmix_x070(MyModule):
             self.value.weight.data.uniform_(-0.5/(C**0.5), 0.5/(C**0.5))
             self.output.weight.data.zero_()
 
-    @MyFunction
+    @torch.jit.script_method
     def forward(self, x, v_first):
         B, T, C = x.size()
         H = self.n_head
@@ -233,7 +218,7 @@ class RWKV_Tmix_x070(MyModule):
         x = self.output(x * g)
         return x, v_first
 
-class RWKV_CMix_x070(MyModule):
+class RWKV_CMix_x070(torch.jit.ScriptModule):
     def __init__(self, args, layer_id):
         super().__init__()
         self.args = args
@@ -253,13 +238,11 @@ class RWKV_CMix_x070(MyModule):
         self.key.weight.data.uniform_(-0.5/(args.n_embd**0.5), 0.5/(args.n_embd**0.5))
         self.value.weight.data.zero_()
 
-    @MyFunction
+    @torch.jit.script_method
     def forward(self, x):
         xx = self.time_shift(x) - x
-
         k = x + xx * self.x_k
         k = torch.relu(self.key(k)) ** 2
-
         return self.value(k)
 
 
@@ -289,51 +272,15 @@ class Block(nn.Module):
             self.drop0 = nn.Dropout(p=args.dropout)
             self.drop1 = nn.Dropout(p=args.dropout)
 
-    if "x070" in os.environ["RWKV_MY_TESTING"]:
+    def forward(self, x, v_first):
+        if self.layer_id == 0:
+            x = self.ln0(x)
 
-        def forward(self, x, v_first):
-            if self.layer_id == 0:
-                x = self.ln0(x)
+        x_attn, v_first = self.att(self.ln1(x), v_first)
+        x = x + x_attn
 
-            x_attn, v_first = self.att(self.ln1(x), v_first)
-            x = x + x_attn
-
-            x = x + self.ffn(self.ln2(x))
-            return x, v_first
-    else:
-
-        def forward(self, x, x_emb=None):
-            args = self.args
-            B, T, C = x.size()
-            if self.layer_id == 0:
-                x = self.ln0(x)
-                if args.my_pos_emb > 0:
-                    pos_emb = (self.pos_emb_x + self.pos_emb_y).reshape(T + 1, -1)[
-                        :-1, :
-                    ]
-                    x = x + pos_emb
-
-            if self.args.dropout == 0:
-                if self.layer_id == 0 and args.pre_ffn > 0:
-                    x = x + self.ffnPre(self.ln1(x))
-                else:
-                    x = x + self.att(self.ln1(x))
-                x = x + self.ffn(self.ln2(x))
-            else:
-                if self.layer_id == 0 and args.pre_ffn > 0:
-                    x = self.drop0(x + self.ffnPre(self.ln1(x)))
-                else:
-                    x = self.drop0(x + self.att(self.ln1(x)))
-                x = self.drop1(x + self.ffn(self.ln2(x)))
-
-            if args.tiny_att_dim > 0 and self.layer_id == args.tiny_att_layer:
-                xx = self.tiny_ln(x)
-                q = self.tiny_q(xx)[:, :T, :]
-                k = self.tiny_k(xx)[:, :T, :]
-                c = (q @ k.transpose(-2, -1)) * (args.tiny_att_dim ** (-0.5))
-                c = c.masked_fill(self.tiny_mask[:T, :T] == 0, 0)
-                x = x + c @ self.tiny_v(x_emb)
-            return x
+        x = x + self.ffn(self.ln2(x))
+        return x, v_first
 
 
 class L2Wrap(torch.autograd.Function):
@@ -353,7 +300,7 @@ class L2Wrap(torch.autograd.Function):
         return (grad_output, gy)
 
 
-class RWKV(L.LightningModule):
+class RWKV(pl.LightningModule):
     def __init__(self, args):
         super().__init__()
         self.args = args
@@ -505,7 +452,6 @@ class RWKV(L.LightningModule):
                 weight_decay=0,
                 amsgrad=False,
             )
-        # return ZeroOneAdam(optim_groups, lr=self.args.lr_init, betas=self.args.betas, eps=self.args.adam_eps, bias_correction=True, weight_decay=0, amsgrad=False, cuda_aware=False)
 
     @property
     def deepspeed_offload(self) -> bool:
@@ -532,21 +478,14 @@ class RWKV(L.LightningModule):
                 else:
                     x = block(x, x_emb)
         else:
-            if "x070" in os.environ["RWKV_MY_TESTING"]:
-                v_first = torch.empty_like(x)
-                for block in self.blocks:
-                    if args.grad_cp == 1:
-                        x, v_first = deepspeed.checkpointing.checkpoint(
-                            block, x, v_first
-                        )
-                    else:
-                        x, v_first = block(x, v_first)
-            else:
-                for block in self.blocks:
-                    if args.grad_cp == 1:
-                        x = deepspeed.checkpointing.checkpoint(block, x)
-                    else:
-                        x = block(x)
+            v_first = torch.empty_like(x)
+            for block in self.blocks:
+                if args.grad_cp == 1:
+                    x, v_first = deepspeed.checkpointing.checkpoint(
+                        block, x, v_first
+                    )
+                else:
+                    x, v_first = block(x, v_first)
 
         x = self.ln_out(x)
 
@@ -575,61 +514,30 @@ class RWKV(L.LightningModule):
             idx, targets = batch
             logits = self(idx)
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
-            # if '0' in os.environ["RWKV_MY_TESTING"]:
-            #     print('logits', logits)
-            #     torch.set_printoptions(threshold=10000)
-            #     print('idx', idx)
-            #     exit(0)
         else:
             idx, targets, mask = batch
             mask = mask.view(-1)
             sum_mask = torch.sum(mask).item()
-            # if sum_mask == 0:
-            #     return torch.tensor([0.0], requires_grad=True)
 
             logits = self(idx)
             if sum_mask == mask.shape[0]:
                 loss = F.cross_entropy(
                     logits.view(-1, logits.size(-1)), targets.view(-1)
                 )
-                # print('rank', self.global_rank, 'loss', loss.item())
             else:
                 loss = F.cross_entropy(
                     logits.view(-1, logits.size(-1)), targets.view(-1), reduction="none"
                 )
-                # loss_raw = loss
                 loss = torch.sum(loss * mask) / sum_mask
-
-                # torch.set_printoptions(threshold=10000)
-                # if True: #self.global_rank == 1:
-                #     tmp = ''
-                #     sss = 0
-                #     ccc = 0
-                #     for i in range(mask.shape[0]):
-                #         if mask[i] > 0:
-                #             tmp += str(idx.view(-1)[i].item()) + ','
-                #             sss += loss_raw.view(-1)[i].float().item()
-                #             ccc += 1
-                #     print('rank', self.global_rank, 'loss', loss.item(), 'lavg', sss / ccc)#, 'tmp', tmp, 'input', idx)
 
         return L2Wrap.apply(loss, logits)
 
     def training_step_end(self, batch_parts):
-        if pl.__version__[0] != "2":
-            all = self.all_gather(batch_parts)
-            if self.trainer.is_global_zero:
-                self.trainer.my_loss_all = all
+        all = self.all_gather(batch_parts)
+        if self.trainer.is_global_zero:
+            self.trainer.my_loss_all = all
 
     def generate_init_weight(self):
-        print(
-            f"""
-############################################################################
-#
-# Init model weight (slow for large models)...
-#
-############################################################################
-"""
-        )
         m = {}
         n_params = 0
         for n in self.state_dict():
@@ -678,60 +586,47 @@ class RWKV(L.LightningModule):
                 nn.init.orthogonal_(m[n], gain=scale)
                 print(f" [scale {scale}]")
             else:
-                if "mamba" in os.environ["RWKV_MY_TESTING"]:
-                    m[n] = p
-                    if ".out_proj.weight" in n:
-                        scale = 0
-                        nn.init.zeros_(m[n])
-                        print(f" [scale {scale}]")
-                    elif ".bias" in n:
-                        scale = 0
-                        nn.init.zeros_(m[n])
-                        print(f" [scale {scale}]")
-                    else:
-                        print()
-                else:
-                    assert n.endswith(".weight")  # should always be true
+                assert n.endswith(".weight")  # should always be true
 
-                    zero = [
-                        ".att.output.",
-                        ".ffn.value.",
-                        ".ffn.receptance.",
-                        ".ffnPre.value.",
-                        ".ffnPre.receptance.",
-                        "head_q.",
-                        ".oo.",
-                        ".rr.",
-                    ]
+                zero = [
+                    ".att.output.",
+                    ".ffn.value.",
+                    ".ffn.receptance.",
+                    ".ffnPre.value.",
+                    ".ffnPre.receptance.",
+                    "head_q.",
+                    ".oo.",
+                    ".rr.",
+                ]
 
-                    for kk in zero:
-                        if kk in n:
-                            scale = 0
-                    if "head_k." in n:
+                for kk in zero:
+                    if kk in n:
+                        scale = 0
+                if "head_k." in n:
+                    scale = 0.1
+                if "head_q." in n:
+                    scale = 0
+
+                for kk in [".att.key."]:
+                    if kk in n:
                         scale = 0.1
-                    if "head_q." in n:
-                        scale = 0
+                for kk in [".att.gate."]:
+                    if kk in n:
+                        scale = 0.1
 
-                    for kk in [".att.key."]:
-                        if kk in n:
-                            scale = 0.1
-                    for kk in [".att.gate."]:
-                        if kk in n:
-                            scale = 0.1
+                print(f" [scale {scale}]")
 
-                    print(f" [scale {scale}]")
+                if self.args.accelerator.upper() == "GPU":
+                    m[n] = torch.empty((shape[0], shape[1]), device="cuda")
+                else:
+                    m[n] = torch.empty((shape[0], shape[1]))
 
-                    if self.args.accelerator.upper() == "GPU":
-                        m[n] = torch.empty((shape[0], shape[1]), device="cuda")
-                    else:
-                        m[n] = torch.empty((shape[0], shape[1]))
-
-                    if scale == 0:
-                        nn.init.zeros_(m[n])
-                    elif scale < 0:
-                        nn.init.uniform_(m[n], a=scale, b=-scale)
-                    else:
-                        nn.init.orthogonal_(m[n], gain=scale)
+                if scale == 0:
+                    nn.init.zeros_(m[n])
+                elif scale < 0:
+                    nn.init.uniform_(m[n], a=scale, b=-scale)
+                else:
+                    nn.init.orthogonal_(m[n], gain=scale)
 
             m[n] = m[n].cpu()
             if os.environ["RWKV_FLOAT_MODE"] == "fp16":
@@ -739,9 +634,6 @@ class RWKV(L.LightningModule):
             elif os.environ["RWKV_FLOAT_MODE"] == "bf16":
                 m[n] = m[n].bfloat16()
             n_params += m[n].numel()
-
-            # if n == "emb.weight":
-            #     print(m[n])
 
         print("model params", n_params)
         gc.collect()
