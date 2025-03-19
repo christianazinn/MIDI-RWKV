@@ -2,68 +2,101 @@
 # The RWKV Language Model - https://github.com/BlinkDL/RWKV-LM
 ########################################################################################################
 
+from copy import deepcopy
+from symusic import Score
+from miditok.utils import get_bars_ticks
+from pathlib import Path
+from tqdm import tqdm
 import logging
+from omegaconf import OmegaConf
+import hydra
 logging.basicConfig(level=logging.INFO)
 
-if __name__ == "__main__":
-    from argparse import ArgumentParser
+SCORE_LOADING_EXCEPTION = (
+    RuntimeError,
+    ValueError,
+    OSError,
+    FileNotFoundError,
+    IOError,
+    EOFError,
+)
+
+TOKENIZER_PARAMS = {
+    "pitch_range": (21, 109),
+    "beat_res": {(0, 1): 12, (1, 2): 4, (2, 4): 2, (4, 8): 1},
+    "num_velocities": 24,
+    "special_tokens": [
+        "PAD",
+        "BOS",
+        "EOS",
+        "Infill_Bar",  # Indicates a bar to be filled in a seq
+        "Infill_Track",  # Used in seq2seq to instruct the decoder to gen a new track
+        "FillBar_Start",  # Start of the portion to infill (containing n bars)
+        "FillBar_End",  # Ends the portion to infill
+    ],
+    "use_chords": False,
+    "use_rests": False,
+    "use_tempos": True,
+    "use_time_signatures": True,
+    "use_pitch_intervals": False,  # cannot be used as extracting tokens in data loading
+    "use_programs": True,
+    "num_tempos": 48,
+    "tempo_range": (50, 200),
+    "programs": list(range(-1, 127)),
+    "base_tokenizer": "REMI",
+    "ac_polyphony_bar": True,
+    "ac_polyphony_track": True,
+    "ac_polyphony_min": 1,
+    "ac_polyphony_max": 6,
+    "ac_pitch_class_bar": True,
+    "ac_note_density_track": True,
+    "ac_note_density_track_min": 0,
+    "ac_note_density_track_max": 18,
+    "ac_note_density_bar": True,
+    "ac_note_density_bar_max": 18,
+    "ac_note_duration_bar": True,
+    "ac_note_duration_track": True,
+    "ac_repetition_track": True,
+    "ac_repetition_track_num_bins": 10,
+    "ac_repetition_track_num_consec_bars": 4,
+}
+
+def is_score_valid(
+    score, min_num_bars: int, min_num_notes: int
+) -> bool:
+    """
+    Check if a ``symusic.Score`` is valid, contains the minimum required number of bars.
+
+    :param score: ``symusic.Score`` to inspect or path to a MIDI file.
+    :param min_num_bars: minimum number of bars the score should contain.
+    :param min_num_notes: minimum number of notes that score should contain.
+    :return: boolean indicating if ``score`` is valid.
+    """
+    if isinstance(score, Path):
+        try:
+            score = Score(score)
+        except SCORE_LOADING_EXCEPTION:
+            return False
+    elif isinstance(score, bytes):
+        try:
+            score = Score.from_midi(score)
+        except SCORE_LOADING_EXCEPTION:
+            return False
+
+    return (
+        score.start() >= 0
+        and len(get_bars_ticks(score)) >= min_num_bars
+        and score.note_num() > min_num_notes
+    )
+
+@hydra.main(config_path="configs", config_name="config")
+def main(config):
+    from argparse import Namespace
     from pytorch_lightning import Trainer
     from pytorch_lightning.utilities import rank_zero_info
     import pytorch_lightning as pl
 
-    rank_zero_info("########## work in progress ##########")
-
-    parser = ArgumentParser()
-
-    parser.add_argument("--load_model", default="", type=str)  # full path, with .pth
-    parser.add_argument("--wandb", default="", type=str)  # wandb project name. if "" then don't use wandb
-    parser.add_argument("--proj_dir", default="out", type=str)
-    parser.add_argument("--random_seed", default="-1", type=int)
-
-    # TODO configure data input
-    # TODO this should be set automatically from your tokenizer!!!
-    parser.add_argument("--vocab_size", default=0, type=int)  # vocab_size = 0 means auto (for char-level LM and .txt data)
-
-    parser.add_argument("--ctx_len", default=1024, type=int)
-    parser.add_argument("--max_epochs", default=100, type=int)  # train for this many epochs
-
-    parser.add_argument("--epoch_save", default=5, type=int)  # save the model every [epoch_save] epochs
-    parser.add_argument("--save-steps", default=0, type=int)  # save the model every [save_steps] steps
-
-    parser.add_argument("--micro_bsz", default=12, type=int)  # micro batch size (batch size per GPU)
-    parser.add_argument("--n_layer", default=6, type=int)  # self explanatory
-    parser.add_argument("--n_embd", default=512, type=int)  # self explanatory
-    parser.add_argument("--dim_att", default=0, type=int)  # will default to n_embd
-    parser.add_argument("--dim_ffn", default=0, type=int)  # will default to 3.5x n_embd
-    parser.add_argument("--", default=0, type=int)  # headQK trick
-
-    parser.add_argument("--lr_init", default=6e-4, type=float)  # 6e-4 for L12-D768, 4e-4 for L24-D1024, 3e-4 for L24-D2048, generally play around with this and use higher lr for larger models
-    parser.add_argument("--lr_final", default=1e-5, type=float)
-    parser.add_argument("--warmup_steps", default=-1, type=int)  # try 20 if you load a model
-    parser.add_argument("--beta1", default=0.9, type=float)
-    parser.add_argument("--beta2", default=0.99, type=float)  # use 0.95 if you see spikes
-    parser.add_argument("--adam_eps", default=1e-8, type=float)
-    parser.add_argument("--grad_cp", default=0, type=int)  # gradient checkpt: saves VRAM, but slower
-    parser.add_argument("--dropout", default=0, type=float) # try 0.01 / 0.02 / 0.05 / 0.1
-    parser.add_argument("--weight_decay", default=0, type=float) # try 0.1
-    parser.add_argument("--weight_decay_final", default=-1, type=float)
-    parser.add_argument("--grad_clip", default=1.0, type=float) # reduce it to 0.7 / 0.5 / 0.3 / 0.2 for problematic samples
-
-    parser.add_argument("--layerwise_lr", default=1, type=int)  # layerwise lr for faster convergence (but slower it/s)
-    parser.add_argument("--ds_bucket_mb", default=200, type=int)  # deepspeed bucket size in MB. 200 seems enough
-
-    parser.add_argument("--head_size_a", default=64, type=int) # can try larger values for larger models
-    parser.add_argument("--chunk-len", default=16, type=int) # chunk length for RWKV
-    parser.add_argument("--head_size_divisor", default=8, type=int)
-    parser.add_argument("--load_partial", default=0, type=int)
-
-    # --num_nodes 1
-    # --accelerator gpu
-    # --devices 1
-    # --precision bf16
-    # --strategy deepspeed_stage_2
-
-    args = parser.parse_args()
+    args = Namespace(**OmegaConf.to_container(config.trainer, resolve=True))
 
     ########################################################################################################
 
@@ -74,52 +107,51 @@ if __name__ == "__main__":
     import deepspeed
     from pytorch_lightning import seed_everything
 
-    if args.random_seed >= 0:
-        print(f"########## WARNING: GLOBAL SEED {args.random_seed} THIS WILL AFFECT MULTIGPU SAMPLING ##########\n" * 3)
-        seed_everything(args.random_seed)
+    if config.random_seed >= 0:
+        print(f"########## WARNING: GLOBAL SEED {config.random_seed} THIS WILL AFFECT MULTIGPU SAMPLING ##########\n" * 3)
+        seed_everything(config.random_seed)
 
     np.set_printoptions(precision=4, suppress=True, linewidth=200)
     warnings.filterwarnings("ignore", ".*Consider increasing the value of the `num_workers` argument*")
     warnings.filterwarnings("ignore", ".*The progress bar already tracks a metric with the*")
 
-    args.my_timestamp = datetime.datetime.today().strftime("%Y-%m-%d-%H-%M-%S")
+    config.my_timestamp = datetime.datetime.today().strftime("%Y-%m-%d-%H-%M-%S")
     args.enable_checkpointing = False
     args.replace_sampler_ddp = False
     args.logger = False
-    args.gradient_clip_val = args.grad_clip
     args.num_sanity_val_steps = 0
     args.check_val_every_n_epoch = int(1e20)
     args.log_every_n_steps = int(1e20)
-    args.betas = (args.beta1, args.beta2)
-    args.real_bsz = int(args.num_nodes) * int(args.devices) * args.micro_bsz
-    os.environ["RWKV_CTXLEN"] = str(args.ctx_len)
-    os.environ["RWKV_HEAD_SIZE_A"] = str(args.head_size_a)
-    os.environ["RWKV_CHUNK_LEN"] = str(args.chunk_len)
-    if args.dim_att <= 0:
-        args.dim_att = args.n_embd
-    if args.dim_ffn <= 0:
-        args.dim_ffn = int((args.n_embd * 3.5) // 32 * 32) # default = 3.5x emb size
+    config.betas = (config.training.beta1, config.training.beta2)
+    config.real_bsz = int(args.num_nodes) * int(args.devices) * config.training.micro_bsz
+    os.environ["RWKV_CTXLEN"] = str(config.model.ctx_len)
+    os.environ["RWKV_HEAD_SIZE_A"] = str(config.model.head_size_a)
+    os.environ["RWKV_CHUNK_LEN"] = str(config.model.chunk_len)
+    if config.model.dim_att <= 0:
+        config.model.dim_att = config.model.n_embd
+    if config.model.dim_ffn <= 0:
+        config.model.dim_ffn = int((config.model.n_embd * 3.5) // 32 * 32)
 
-    args.run_name = f"{args.vocab_size} ctx{args.ctx_len} L{args.n_layer} D{args.n_embd}"
-    if not os.path.exists(args.proj_dir):
-        os.makedirs(args.proj_dir)
+    config.run_name = f"{config.model.vocab_size} ctx{config.model.ctx_len} L{config.model.n_layer} D{config.model.n_embd}"
+    if not os.path.exists(config.proj_dir):
+        os.makedirs(config.proj_dir)
 
     rank_zero_info(
         f"""
 ############################################################################
 #
-# RWKV-7 {args.precision.upper()} on {args.num_nodes}x{args.devices} {args.accelerator.upper()}, bsz {args.num_nodes}x{args.devices}x{args.micro_bsz}={args.real_bsz}, {args.strategy} {'with grad_cp' if args.grad_cp > 0 else ''}
+# RWKV-7 {config.trainer.precision.upper()} on {config.trainer.num_nodes}x{config.trainer.devices} {config.trainer.accelerator.upper()}, bsz {config.trainer.num_nodes}x{config.trainer.devices}x{config.training.micro_bsz}={config.real_bsz}, {config.trainer.strategy} {'with grad_cp' if config.model.grad_cp > 0 else ''}
 #
-# Data = {args.data_file} ({args.data_type}), ProjDir = {args.proj_dir}
+# ProjDir = {config.proj_dir}
 #
-# Epoch = {args.epoch_begin} to {args.epoch_begin + args.epoch_count - 1}, save every {args.epoch_save} epochs
+# Epochs to {config.trainer.max_epochs}, save every {config.training.epoch_save} epochs
 #
-# Model = {args.n_layer} n_layer, {args.n_embd} n_embd, {args.ctx_len} ctx_len
+# Model = {config.model.n_layer} n_layer, {config.model.n_embd} n_embd, {config.model.ctx_len} ctx_len
 #
-# Adam = lr {args.lr_init} to {args.lr_final}, warmup {args.warmup_steps} steps, beta {args.betas}, eps {args.adam_eps}
+# Adam = lr {config.training.lr_init} to {config.training.lr_final}, warmup {config.training.warmup_steps} steps, beta {config.betas}, eps {config.model.adam_eps}
 #
 # Found torch {torch.__version__}, recommend latest torch
-# Found deepspeed {deepspeed.__Version__}, recommend latest deepspeed
+# Found deepspeed {deepspeed.__version__}, recommend latest deepspeed
 # Found pytorch_lightning {pl.__version__}, REQUIRE 1.9.5
 #
 ############################################################################
@@ -127,77 +159,125 @@ if __name__ == "__main__":
     )
     rank_zero_info(str(vars(args)) + "\n")
 
-    if args.lr_final == 0 or args.lr_init == 0:
+    if config.training.lr_final == 0 or config.training.lr_init == 0:
         rank_zero_info("\n\nNote: lr_final = 0 or lr_init = 0. Using linear LR schedule instead.\n\n")
 
-    assert args.precision in ["fp32", "tf32", "fp16", "bf16"]
-    os.environ["RWKV_FLOAT_MODE"] = args.precision
-    if args.precision == "fp32":
-        for i in range(10):
-            rank_zero_info("\n\nNote: you are using fp32 (very slow). Try bf16 / tf32 for faster training.\n\n")
-    if args.precision == "fp16":
+    assert config.trainer.precision in ["tf32", "fp16", "bf16"]
+    os.environ["RWKV_FLOAT_MODE"] = config.trainer.precision
+    if config.trainer.precision == "fp16":
         rank_zero_info("\n\nNote: you are using fp16 (might overflow). Try bf16 / tf32 for stable training.\n\n")
 
     torch.backends.cudnn.benchmark = True
     torch.backends.cudnn.enabled = True
-    if args.precision == "fp32":
-        torch.backends.cudnn.allow_tf32 = False
-        torch.backends.cuda.matmul.allow_tf32 = False
-    else:
-        torch.backends.cudnn.allow_tf32 = True
-        torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    torch.backends.cuda.matmul.allow_tf32 = True
 
-    if "32" in args.precision:
-        args.precision = 32
-    elif args.precision == "fp16":
-        args.precision = 16
+    if "32" in config.trainer.precision:
+        config.trainer.precision = 32
+    elif config.trainer.precision == "fp16":
+        config.trainer.precision = 16
     else:
-        args.precision = "bf16"
+        config.trainer.precision = "bf16"
 
     ########################################################################################################
 
     from trainer import train_callback, generate_init_weight
-    # TODO change me
-    from deprecated.dataset import MyDataset
-
-    train_data = MyDataset(args)
-    args.vocab_size = train_data.vocab_size
-
+    from dataset import MIDIDataset
+    from datasets import load_dataset, load_from_disk
+    from miditok import MMM, TokenizerConfig
     from model import RWKV
-    model = RWKV(args)
 
-    if len(args.load_model) == 0:  # shall we build the initial weights?
-        args.load_model = f"{args.proj_dir}/rwkv-init.pth"
-        generate_init_weight(model, args.load_model)  # save initial weights
+    # omegaconf tuple stuff
+    dc = config.data
+    tokenizer = MMM(params="/home/christian/MIDI-RWKV/src/tokenizer/tokenizer_with_acs.json")  # MMM(TokenizerConfig(**deepcopy(TOKENIZER_PARAMS)))
+    dc.tracks_selection_random_ratio_range = (0.4, 1)
+    dc.ratios_range_bar_infilling_duration = (0.1, 0.4)
+    dc.acs_random_ratio_range = (0.05, 0.9)
+    dc.tracks_idx_random_ratio_range = (0.1, 1)
+    dc.bars_idx_random_ratio_range = (0.1, 0.7)
+    dc.data_augmentation_offsets = (6, 2, 0) 
 
-    rank_zero_info(f"########## Loading {args.load_model}... ##########")
+    if not os.path.exists(dc.prefiltered_dataset_path):
+        ds = load_dataset("parquet", data_files={"train": "/home/christian/MMM/data/GigaMIDI/all-instruments-with-drums/train.parquet"})
+        ds = ds.filter(
+            lambda ex: is_score_valid(
+                ex["music"], dc.min_num_bars_file_valid, dc.min_num_notes_file_valid
+            )
+        )["train"]
+        
+        print(f"After initial filtering: {len(ds)} samples")
+    
+        # Initialize the full dataset processor
+        full_dataset = MIDIDataset(
+                    ds,
+                    tokenizer,
+                    dc.max_seq_len,
+                    dc.tracks_selection_random_ratio_range,
+                    dc.data_augmentation_offsets,
+                    dc.ratio_bar_infilling,
+                    dc.ratios_range_bar_infilling_duration,
+                    ac_random_ratio_range=dc.acs_random_ratio_range,
+                    ac_tracks_random_ratio_range=dc.tracks_idx_random_ratio_range,
+                    ac_bars_random_ratio_range=dc.bars_idx_random_ratio_range)
+        
+        # Test every single entry
+        print("Testing all samples for processing errors...")
+        valid_indices = []
+        for i in tqdm(range(len(full_dataset))):
+            sample = full_dataset[i]
+            if sample[full_dataset.sample_key_name] is not None:
+                valid_indices.append(i)
+        
+        # Filter the dataset to keep only valid samples
+        ds = ds.select(valid_indices)
+        
+        print(f"Final dataset has {len(ds)} samples")
+        
+        # Save the filtered dataset
+        ds.save_to_disk(dc.prefiltered_dataset_path)
+        print("Filtered dataset saved to disk")
+    else:
+        ds = load_from_disk(dc.prefiltered_dataset_path)
+    
+    train_data = MIDIDataset(
+                ds,
+                tokenizer,
+                dc.max_seq_len,
+                dc.tracks_selection_random_ratio_range,
+                dc.data_augmentation_offsets,
+                dc.ratio_bar_infilling,
+                dc.ratios_range_bar_infilling_duration,
+                ac_random_ratio_range=dc.acs_random_ratio_range,
+                ac_tracks_random_ratio_range=dc.tracks_idx_random_ratio_range,
+                ac_bars_random_ratio_range=dc.bars_idx_random_ratio_range)
+    model = RWKV(config)
+
+    if len(config.load_model) == 0:  # shall we build the initial weights?
+        config.load_model = f"{config.proj_dir}/rwkv-init.pth"
+        generate_init_weight(model, config.load_model)  # save initial weights
+
+    rank_zero_info(f"########## Loading {config.load_model}... ##########")
     try:
-        load_dict = torch.load(args.load_model, map_location="cpu")
+        load_dict = torch.load(config.load_model, map_location="cpu")
         load_keys = list(load_dict.keys())
         for k in load_keys:
             if k.startswith('_forward_module.'):
                 load_dict[k.replace('_forward_module.','')] = load_dict[k]
                 del load_dict[k]
     except:
-        raise RuntimeError(f"Bad checkpoint {args.load_model}")
+        raise RuntimeError(f"Bad checkpoint {config.load_model}")
 
-    state_file = f"{args.proj_dir}/rwkv-init-state.pth"
+    state_file = f"{config.proj_dir}/rwkv-init-state.pth"
     if os.path.isfile(state_file):
         rank_zero_info(f"########## Loading State {state_file}... ##########")
         state_dict = torch.load(state_file, map_location="cpu")
         for k in state_dict:
             load_dict[k] = state_dict[k]
-
-    if args.load_partial == 1:
-        load_keys = load_dict.keys()
-        for k in model.state_dict():
-            if k not in load_keys:
-                load_dict[k] = model.state_dict()[k]
     model.load_state_dict(load_dict)
 
     trainer = Trainer.from_argparse_args(
         args,
-        callbacks=[train_callback(args)],
+        callbacks=[train_callback(config)],
     )
 
     if trainer.global_rank == 0:
@@ -209,11 +289,15 @@ if __name__ == "__main__":
             s3 = str(shape[3]) if len(shape) > 3 else ""
             print(f"{s0.ljust(5)} {s1.ljust(5)} {s2.ljust(5)} {s3.ljust(5)} {n}")
 
-    if "deepspeed" in args.strategy:
-        trainer.strategy.config["zero_optimization"]["allgather_bucket_size"] = args.ds_bucket_mb * 1000 * 1000
-        trainer.strategy.config["zero_optimization"]["reduce_bucket_size"] = args.ds_bucket_mb * 1000 * 1000
+    if "deepspeed" in config.trainer.strategy:
+        trainer.strategy.config["zero_optimization"]["allgather_bucket_size"] = config.training.ds_bucket_mb * 1000 * 1000
+        trainer.strategy.config["zero_optimization"]["reduce_bucket_size"] = config.training.ds_bucket_mb * 1000 * 1000
 
     # must set shuffle=False, persistent_workers=False (because worker is in another thread)
-    data_loader = DataLoader(train_data, shuffle=False, pin_memory=True, batch_size=args.micro_bsz, num_workers=1, persistent_workers=False, drop_last=True)
+    data_loader = DataLoader(train_data, shuffle=False, pin_memory=True, batch_size=config.training.micro_bsz, num_workers=1, persistent_workers=False, drop_last=True)
 
     trainer.fit(model, data_loader)
+
+
+if __name__ == "__main__":
+    main()

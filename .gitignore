@@ -2,3 +2,4 @@ out/
 wandb/
 __pycache__/
 data/
+outputs/

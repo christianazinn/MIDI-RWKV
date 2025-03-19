@@ -21,7 +21,7 @@ CHUNK_LEN = int(os.environ["RWKV_CHUNK_LEN"])
 
 load(
     name="wind_backstepping",
-    sources=["cuda/wkv7_cuda.cu", "cuda/wkv7_op.cpp"],
+    sources=["/home/christian/MIDI-RWKV/src/cuda/wkv7_cuda.cu", "/home/christian/MIDI-RWKV/src/cuda/wkv7_op.cpp"],
     is_python_module=False,
     verbose=True,
     extra_cuda_cflags=[
@@ -74,21 +74,20 @@ def RUN_CUDA_RWKV7g(q, w, k, v, a, b):
 
 
 class RWKV_Tmix_x070(torch.jit.ScriptModule):
-    def __init__(self, args, layer_id):
+    def __init__(self, config, layer_id):
         super().__init__()
-        self.args = args
         self.layer_id = layer_id
 
-        self.head_size = args.head_size_a
-        self.n_head = args.dim_att // self.head_size
-        assert args.dim_att % self.n_head == 0
+        self.head_size = config.head_size_a
+        self.n_head = config.dim_att // self.head_size
+        assert config.dim_att % self.n_head == 0
         H = self.n_head
         N = self.head_size
-        C = args.n_embd
+        C = config.n_embd
 
         with torch.no_grad():
-            ratio_0_to_1 = layer_id / (args.n_layer - 1)  # 0 to 1
-            ratio_1_to_almost0 = 1.0 - (layer_id / args.n_layer)  # 1 to ~0
+            ratio_0_to_1 = layer_id / (config.n_layer - 1)  # 0 to 1
+            ratio_1_to_almost0 = 1.0 - (layer_id / config.n_layer)  # 1 to ~0
             ddd = torch.ones(1, 1, C)
             for i in range(C):
                 ddd[0, 0, i] = i / C
@@ -163,7 +162,7 @@ class RWKV_Tmix_x070(torch.jit.ScriptModule):
             self.value = nn.Linear(C, C, bias=False)
             self.output = nn.Linear(C, C, bias=False)
             self.ln_x = nn.GroupNorm(
-                H, C, eps=(1e-5) * (args.head_size_divisor**2)
+                H, C, eps=(1e-5) * (config.head_size_divisor**2)
             )  # !!! notice eps value !!!
 
             self.receptance.weight.data.uniform_(-0.5/(C**0.5), 0.5/(C**0.5))
@@ -218,23 +217,22 @@ class RWKV_Tmix_x070(torch.jit.ScriptModule):
         return x, v_first
 
 class RWKV_CMix_x070(torch.jit.ScriptModule):
-    def __init__(self, args, layer_id):
+    def __init__(self, config, layer_id):
         super().__init__()
-        self.args = args
         self.layer_id = layer_id
         self.time_shift = nn.ZeroPad2d((0, 0, 1, -1))
 
         with torch.no_grad():
-            ratio_1_to_almost0 = 1.0 - (layer_id / args.n_layer)  # 1 to ~0
-            ddd = torch.ones(1, 1, args.n_embd)
-            for i in range(args.n_embd):
-                ddd[0, 0, i] = i / args.n_embd
+            ratio_1_to_almost0 = 1.0 - (layer_id / config.n_layer)  # 1 to ~0
+            ddd = torch.ones(1, 1, config.n_embd)
+            for i in range(config.n_embd):
+                ddd[0, 0, i] = i / config.n_embd
             self.x_k = nn.Parameter(1.0 - torch.pow(ddd, ratio_1_to_almost0**4))
 
-        self.key = nn.Linear(args.n_embd, args.n_embd * 4, bias=False)
-        self.value = nn.Linear(args.n_embd * 4, args.n_embd, bias=False)
+        self.key = nn.Linear(config.n_embd, config.n_embd * 4, bias=False)
+        self.value = nn.Linear(config.n_embd * 4, config.n_embd, bias=False)
 
-        self.key.weight.data.uniform_(-0.5/(args.n_embd**0.5), 0.5/(args.n_embd**0.5))
+        self.key.weight.data.uniform_(-0.5/(config.n_embd**0.5), 0.5/(config.n_embd**0.5))
         self.value.weight.data.zero_()
 
     @torch.jit.script_method
@@ -246,19 +244,18 @@ class RWKV_CMix_x070(torch.jit.ScriptModule):
 
 
 class Block(nn.Module):
-    def __init__(self, args, layer_id):
+    def __init__(self, config, layer_id):
         super().__init__()
-        self.args = args
         self.layer_id = layer_id
 
-        self.ln1 = nn.LayerNorm(args.n_embd)
-        self.ln2 = nn.LayerNorm(args.n_embd)
+        self.ln1 = nn.LayerNorm(config.n_embd)
+        self.ln2 = nn.LayerNorm(config.n_embd)
 
         if self.layer_id == 0:
-            self.ln0 = nn.LayerNorm(args.n_embd)
+            self.ln0 = nn.LayerNorm(config.n_embd)
 
-        self.att = RWKV_Tmix_x070(args, layer_id)
-        self.ffn = RWKV_CMix_x070(args, layer_id)
+        self.att = RWKV_Tmix_x070(config, layer_id)
+        self.ffn = RWKV_CMix_x070(config, layer_id)
 
     def forward(self, x, v_first):
         if self.layer_id == 0:
@@ -289,51 +286,50 @@ class L2Wrap(torch.autograd.Function):
 
 
 class RWKV(pl.LightningModule):
-    def __init__(self, args):
+    def __init__(self, config):
         super().__init__()
-        self.args = args
-        if not hasattr(args, "dim_att"):
-            args.dim_att = args.n_embd
-        if not hasattr(args, "dim_ffn"):
-            args.dim_ffn = int((args.n_embd * 3.5) // 32 * 32)
-        assert args.n_embd % 32 == 0
-        assert args.dim_att % 32 == 0
-        assert args.dim_ffn % 32 == 0
+        self.lr_init = config.training.lr_init
+        self.weight_decay = config.training.weight_decay
+        self.layerwise_lr = config.training.layerwise_lr
+        self.betas = config.betas
+        config = config.model
+        self.config = config
+        assert config.n_embd % 32 == 0
+        assert config.dim_att % 32 == 0
+        assert config.dim_ffn % 32 == 0
 
-        self.blocks = nn.ModuleList([Block(args, i) for i in range(args.n_layer)])
+        self.blocks = nn.ModuleList([Block(config, i) for i in range(config.n_layer)])
 
-        self.emb = nn.Embedding(args.vocab_size, args.n_embd)
-        self.ln_out = nn.LayerNorm(args.n_embd)
-        self.head = nn.Linear(args.n_embd, args.vocab_size, bias=False)
+        self.emb = nn.Embedding(config.vocab_size, config.n_embd)
+        self.ln_out = nn.LayerNorm(config.n_embd)
+        self.head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
-        if args.dropout > 0:
-            self.drop0 = nn.Dropout(p=args.dropout)
+        if config.dropout > 0:
+            self.drop0 = nn.Dropout(p=config.dropout)
 
     def configure_optimizers(self):
-        args = self.args
-
         lr_decay = set()
         lr_1x = set()
         lr_2x = set()
         lr_3x = set()
         for n, p in self.named_parameters():
-            if (("_w1" in n) or ("_w2" in n)) and (args.layerwise_lr > 0):
+            if (("_w1" in n) or ("_w2" in n)) and (self.layerwise_lr > 0):
                 lr_1x.add(n)
-            elif ("time_sta" in n) and (args.weight_decay > 0):
+            elif ("time_sta" in n) and (self.weight_decay > 0):
                 lr_decay.add(n)
-            elif (("time_mix" in n) or ("time_maa" in n)) and (args.layerwise_lr > 0):
+            elif (("time_mix" in n) or ("time_maa" in n)) and (self.layerwise_lr > 0):
                 lr_1x.add(n)
             elif (("time_decay" in n) or ("time_daaaa" in n) or ("att.w0" in n)) and (
-                args.layerwise_lr > 0
+                self.layerwise_lr > 0
             ):
                 lr_2x.add(n)
-            elif ("time_faaaa" in n) and (args.layerwise_lr > 0):
+            elif ("time_faaaa" in n) and (self.layerwise_lr > 0):
                 lr_1x.add(n)
-            elif ("time_first" in n) and (args.layerwise_lr > 0):
+            elif ("time_first" in n) and (self.layerwise_lr > 0):
                 lr_3x.add(n)
             elif (
                 (len(p.squeeze().shape) >= 2)
-                and (args.weight_decay > 0)
+                and (self.weight_decay > 0)
                 and (".weight" in n)
             ):
                 lr_decay.add(n)
@@ -371,29 +367,29 @@ class RWKV(pl.LightningModule):
             },
         ]
 
-        if args.weight_decay > 0:
+        if self.weight_decay > 0:
             optim_groups += [
                 {
                     "params": [param_dict[n] for n in lr_decay],
-                    "weight_decay": args.weight_decay,
+                    "weight_decay": self.weight_decay,
                     "my_lr_scale": 1.0,
                 }
             ]
             if self.deepspeed_offload:
                 return DeepSpeedCPUAdam(
                     optim_groups,
-                    lr=self.args.lr_init,
-                    betas=self.args.betas,
-                    eps=self.args.adam_eps,
+                    lr=self.lr_init,
+                    betas=self.betas,
+                    eps=self.config.adam_eps,
                     bias_correction=True,
                     adamw_mode=True,
                     amsgrad=False,
                 )
             return FusedAdam(
                 optim_groups,
-                lr=self.args.lr_init,
-                betas=self.args.betas,
-                eps=self.args.adam_eps,
+                lr=self.lr_init,
+                betas=self.betas,
+                eps=self.config.adam_eps,
                 bias_correction=True,
                 adam_w_mode=True,
                 amsgrad=False,
@@ -402,9 +398,9 @@ class RWKV(pl.LightningModule):
             if self.deepspeed_offload:
                 return DeepSpeedCPUAdam(
                     optim_groups,
-                    lr=self.args.lr_init,
-                    betas=self.args.betas,
-                    eps=self.args.adam_eps,
+                    lr=self.lr_init,
+                    betas=self.betas,
+                    eps=self.config.adam_eps,
                     bias_correction=True,
                     adamw_mode=False,
                     weight_decay=0,
@@ -412,9 +408,9 @@ class RWKV(pl.LightningModule):
                 )
             return FusedAdam(
                 optim_groups,
-                lr=self.args.lr_init,
-                betas=self.args.betas,
-                eps=self.args.adam_eps,
+                lr=self.lr_init,
+                betas=self.betas,
+                eps=self.config.adam_eps,
                 bias_correction=True,
                 adam_w_mode=False,
                 weight_decay=0,
@@ -430,17 +426,16 @@ class RWKV(pl.LightningModule):
         return False
 
     def forward(self, idx):
-        args = self.args
         B, T = idx.size()
-        assert T <= args.ctx_len, "Cannot forward, model ctx_len is exhausted."
+        assert T <= self.config.ctx_len, "Cannot forward, model ctx_len is exhausted."
 
         x = self.emb(idx)
 
-        if args.dropout > 0:
+        if self.config.dropout > 0:
             x = self.drop0(x)
         v_first = torch.empty_like(x)
         for block in self.blocks:
-            if args.grad_cp == 1:
+            if self.config.grad_cp == 1:
                 x, v_first = deepspeed.checkpointing.checkpoint(
                     block, x, v_first
                 )
@@ -492,7 +487,7 @@ class RWKV(pl.LightningModule):
                 or (".weight" not in n)
             ):
                 if "ln_x.weight" in n:
-                    layer_scale = (1 + int(n.split(".")[1])) / self.args.n_layer
+                    layer_scale = (1 + int(n.split(".")[1])) / self.config.n_layer
                     m[n] = (p * 0.0) + (layer_scale**0.7)
                 else:
                     m[n] = p
@@ -504,8 +499,8 @@ class RWKV(pl.LightningModule):
                 print(f" [scale {scale}]")
             elif n == "head.weight":
                 m[n] = p
-                if self.args.vocab_size > self.args.n_embd:
-                    scale = 0.5 * math.sqrt(self.args.vocab_size / self.args.n_embd)
+                if self.config.vocab_size > self.config.n_embd:
+                    scale = 0.5 * math.sqrt(self.config.vocab_size / self.config.n_embd)
                 else:
                     scale = 0.5
                 nn.init.orthogonal_(m[n], gain=scale)
@@ -541,10 +536,8 @@ class RWKV(pl.LightningModule):
 
                 print(f" [scale {scale}]")
 
-                if self.args.accelerator.upper() == "GPU":
-                    m[n] = torch.empty((shape[0], shape[1]), device="cuda")
-                else:
-                    m[n] = torch.empty((shape[0], shape[1]))
+                # CUDA only
+                m[n] = torch.empty((shape[0], shape[1]), device="cuda")
 
                 if scale == 0:
                     nn.init.zeros_(m[n])
