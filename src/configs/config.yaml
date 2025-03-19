@@ -1,4 +1,4 @@
-load_model: ""  # if continuing: full path with .pth
+load_model: "/home/christian/MIDI-RWKV/src/outputs/2025-03-19/12-50-35/out/rwkv-2.pth"  # if continuing: full path with .pth
 wandb: "MIDI-RWKV"
 proj_dir: "out"
 random_seed: -1
@@ -25,7 +25,7 @@ model:
     vocab_size: 16000  # TODO this should be set automatically from your tokenizer!!!
     ctx_len: 2048  # TODO tune me
 
-    n_layer: 6  # TODO tune me
+    n_layer: 8  # TODO tune me
     n_embd: 512  # TODO tune me
     dim_att: 0  # 0 defaults to n_embd
     dim_ffn: 0  # 0 defautls to 3.5 * n_embd
@@ -41,7 +41,7 @@ model:
 training:
     epoch_save: 1  # save per epochs
     save_steps: 0  # save per steps
-    micro_bsz: 12  # bsz per GPU
+    micro_bsz: 16  # bsz per GPU
 
     lr_schedule: "cosine"
     layerwise_lr: 1  # layerwise for faster convergence, slower it/s
@@ -51,10 +51,12 @@ training:
 
     beta1: 0.9   # ZeRO betas
     beta2: 0.99  # ZeRO betas
-    ds_bucket_mb: 200  # ZeRO bucket size MB
+    ds_bucket_mb: 20  # ZeRO bucket size MB
 
-    weight_decay: 0  # try 0.1
+    weight_decay: 0.01  # try 0.1
     weight_decay_final: -1
+
+    dataloader_num_workers: 8
 
 # TODO: omegaconf does not support tuples very well
 data:

@@ -449,6 +449,8 @@ class RWKV(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         idx, targets = batch
+        #idx = batch["input_ids"]
+        #targets = batch["labels"]
         logits = self(idx)
         loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
         return L2Wrap.apply(loss, logits)

@@ -1,5 +1,6 @@
 import math, time, datetime
 import torch
+import gc
 import pytorch_lightning as pl
 from pytorch_lightning.utilities import rank_zero_only
 
@@ -84,10 +85,11 @@ class train_callback(pl.Callback):
             if self.config.wandb:
                 print("Login to wandb...")
                 import wandb
+                from omegaconf import OmegaConf
                 wandb.init(
                     project=self.config.wandb,
                     name=self.config.run_name + " " + self.config.my_timestamp,
-                    config=self.config,
+                    config=OmegaConf.to_container(self.config, resolve=True),
                     save_code=False,
                 )
                 trainer.my_wandb = wandb
@@ -171,6 +173,9 @@ class train_callback(pl.Callback):
             # Reset epoch stats
             trainer.my_loss_sum = 0
             trainer.my_loss_count = 0
+
+        torch.cuda.empty_cache()
+        gc.collect()
 
 
 @rank_zero_only

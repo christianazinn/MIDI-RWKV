@@ -13,10 +13,11 @@ from miditok.data_augmentation.data_augmentation import (
     _filter_offset_tuples_to_score,
     augment_score,
 )
-from miditok.pytorch_data import DatasetMIDI
+from miditok.pytorch_data import DatasetMIDI, DataCollator
 from miditok.utils import get_bars_ticks
 from symusic import Score
 from torch import LongTensor, isin
+import torch
 
 SLURM_OUT_INFO_BASE_DIR = "/home/christian/MMM/logs"
 
@@ -39,6 +40,42 @@ def concat_tokseq(sequences: list[TokSequence]) -> TokSequence:
     for seq in sequences:
         tokseq += seq
     return tokseq
+
+
+class DataCollatorNoneFilter:
+    def __init__(self, pad_token_id=0, max_length=2048):
+        self.pad_token_id = pad_token_id
+        self.max_length = max_length
+        self.collator = DataCollator(pad_token_id)
+    
+    def __call__(self, batch):
+        collated_batch = self.collator(batch)
+        
+        # Get the current sequence length
+        input_ids = collated_batch["input_ids"]
+        labels = collated_batch["labels"]
+        batch_size, seq_len = input_ids.size()
+        
+        # Pad to the fixed length if needed
+        if seq_len < self.max_length:
+            padding_len = self.max_length - seq_len
+            
+            # Pad the input_ids tensor
+            padding = torch.full((batch_size, padding_len), self.pad_token_id, 
+                                dtype=input_ids.dtype, device=input_ids.device)
+            input_ids = torch.cat([input_ids, padding], dim=1)
+            
+            # For labels, use -100 for padding positions
+            label_padding = torch.full((batch_size, padding_len), -100, 
+                                      dtype=labels.dtype, device=labels.device)
+            labels = torch.cat([labels, label_padding], dim=1)
+        elif seq_len > self.max_length:
+            # Truncate if sequence is longer than max_length
+            input_ids = input_ids[:, :self.max_length]
+            labels = labels[:, :self.max_length]
+        
+        # Return just the input_ids and labels as a tuple
+        return input_ids, labels
 
 
 class MIDIDataset(DatasetMIDI):
@@ -204,7 +241,7 @@ class MIDIDataset(DatasetMIDI):
 
         # Tokenize the score
         try:
-            tseq, decoder_input_ids = self._tokenize_score(score)
+            tseq, decoder_input_ids = self.old_tokenize_score(score)
         except IndexError as e:
             #raise e
             item = {self.sample_key_name: None, self.labels_key_name: None}

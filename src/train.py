@@ -182,7 +182,7 @@ def main(config):
     ########################################################################################################
 
     from trainer import train_callback, generate_init_weight
-    from dataset import MIDIDataset
+    from dataset import MIDIDataset, DataCollatorNoneFilter
     from datasets import load_dataset, load_from_disk
     from miditok import MMM, TokenizerConfig
     from model import RWKV
@@ -206,32 +206,6 @@ def main(config):
         )["train"]
         
         print(f"After initial filtering: {len(ds)} samples")
-    
-        # Initialize the full dataset processor
-        full_dataset = MIDIDataset(
-                    ds,
-                    tokenizer,
-                    dc.max_seq_len,
-                    dc.tracks_selection_random_ratio_range,
-                    dc.data_augmentation_offsets,
-                    dc.ratio_bar_infilling,
-                    dc.ratios_range_bar_infilling_duration,
-                    ac_random_ratio_range=dc.acs_random_ratio_range,
-                    ac_tracks_random_ratio_range=dc.tracks_idx_random_ratio_range,
-                    ac_bars_random_ratio_range=dc.bars_idx_random_ratio_range)
-        
-        # Test every single entry
-        print("Testing all samples for processing errors...")
-        valid_indices = []
-        for i in tqdm(range(len(full_dataset))):
-            sample = full_dataset[i]
-            if sample[full_dataset.sample_key_name] is not None:
-                valid_indices.append(i)
-        
-        # Filter the dataset to keep only valid samples
-        ds = ds.select(valid_indices)
-        
-        print(f"Final dataset has {len(ds)} samples")
         
         # Save the filtered dataset
         ds.save_to_disk(dc.prefiltered_dataset_path)
@@ -293,8 +267,10 @@ def main(config):
         trainer.strategy.config["zero_optimization"]["allgather_bucket_size"] = config.training.ds_bucket_mb * 1000 * 1000
         trainer.strategy.config["zero_optimization"]["reduce_bucket_size"] = config.training.ds_bucket_mb * 1000 * 1000
 
+    collator = DataCollatorNoneFilter(pad_token_id=tokenizer.pad_token_id, max_length=config.model.ctx_len)
+
     # must set shuffle=False, persistent_workers=False (because worker is in another thread)
-    data_loader = DataLoader(train_data, shuffle=False, pin_memory=True, batch_size=config.training.micro_bsz, num_workers=1, persistent_workers=False, drop_last=True)
+    data_loader = DataLoader(train_data, shuffle=False, pin_memory=True, batch_size=config.training.micro_bsz, num_workers=config.training.dataloader_num_workers, persistent_workers=False, drop_last=True, collate_fn=collator)
 
     trainer.fit(model, data_loader)
 
