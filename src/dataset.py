@@ -19,8 +19,6 @@ from symusic import Score
 from torch import LongTensor, isin
 import torch
 
-SLURM_OUT_INFO_BASE_DIR = "/home/christian/MMM/logs"
-
 if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path

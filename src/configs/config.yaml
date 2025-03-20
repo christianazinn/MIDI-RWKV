@@ -11,7 +11,7 @@ run_name:
 
 trainer:
     gradient_clip_val: 1.0  # reduce it to 0.7 / 0.5 / 0.3 / 0.2 for problematic samples
-    max_epochs: 100
+    max_epochs: 10
 
     num_nodes: 1
     accelerator: "gpu"
@@ -61,6 +61,9 @@ training:
 # TODO: omegaconf does not support tuples very well
 data:
     prefiltered_dataset_path: /home/christian/MIDI-RWKV/src/data/prefiltered
+    otherwise_train_data_path: /home/christian/MMM/data/GigaMIDI/all-instruments-with-drums/train.parquet
+    tokenizer_path: "/home/christian/MIDI-RWKV/src/tokenizer/tokenizer_with_acs.json"
+    src_dir: "/home/christian/MIDI-RWKV/src"
 
     max_seq_len: ${model.ctx_len}
     tracks_selection_random_ratio_range: # (0.4, 1)

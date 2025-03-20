@@ -18,10 +18,11 @@ from torch.utils.cpp_extension import load
 
 HEAD_SIZE = int(os.environ["RWKV_HEAD_SIZE_A"])
 CHUNK_LEN = int(os.environ["RWKV_CHUNK_LEN"])
+SRC_DIR = os.environ["RWKV_SRC_DIR"]
 
 load(
     name="wind_backstepping",
-    sources=["/home/christian/MIDI-RWKV/src/cuda/wkv7_cuda.cu", "/home/christian/MIDI-RWKV/src/cuda/wkv7_op.cpp"],
+    sources=[os.path.join(SRC_DIR, "cuda/wkv7_cuda.cu"), os.path.join(SRC_DIR, "cuda/wkv7_op.cpp")],
     is_python_module=False,
     verbose=True,
     extra_cuda_cflags=[

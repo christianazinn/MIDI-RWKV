@@ -406,6 +406,7 @@ if __name__ == "__main__":
     import fla
     from transformers import GenerationConfig, AutoModelForCausalLM
     from symusic import Synthesizer, dump_wav
+    from pathlib import Path
     INFERENCE_CONFIG = InferenceConfig(
         {
             2: [(12, 14, ["ACBarNoteDensity_6", "ACBarNoteDurationEight_1"])],
@@ -423,14 +424,15 @@ if __name__ == "__main__":
             max_new_tokens=300,
         )
     
-    TOK_PATH = "/home/christian/MIDI-RWKV/src/tokenizer/tokenizer_with_acs.json"
+    current_dir = Path(__file__).absolute()
+    TOK_PATH = current_dir.parent / "tokenizer/tokenizer_with_acs.json"
     MODEL_PATH = "../outputs/outdir"
-    INPUT_PATH = "/home/christian/MIDI-RWKV/src/inference/mat/rollinggirlEDIT.mid"
-    OUTPUT_PATH = "/home/christian/MIDI-RWKV/src/inference/mat/output.mid"
-    OUTWAV_PATH = "/home/christian/MIDI-RWKV/src/inference/mat/output.wav"
-    INWAV_PATH = "/home/christian/MIDI-RWKV/src/inference/mat/input.wav"
-    OUTPR_PATH = "/home/christian/MIDI-RWKV/src/inference/mat/output.png"
-    INPR_PATH = "/home/christian/MIDI-RWKV/src/inference/mat/input.png"
+    INPUT_PATH = current_dir / "mat/rollinggirlEDIT.mid"
+    OUTPUT_PATH = current_dir / "mat/output.mid"
+    OUTWAV_PATH = current_dir / "mat/output.wav"
+    INWAV_PATH = current_dir / "mat/input.wav"
+    OUTPR_PATH = current_dir / "mat/output.png"
+    INPR_PATH = current_dir / "mat/input.png"
     
     tokenizer = MMM(params=TOK_PATH)
     model = AutoModelForCausalLM.from_pretrained(MODEL_PATH).to("cuda")

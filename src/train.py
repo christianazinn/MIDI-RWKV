@@ -179,6 +179,8 @@ def main(config):
     else:
         config.trainer.precision = "bf16"
 
+    os.environ["RWKV_SRC_DIR"] = config.data.src_dir
+
     ########################################################################################################
 
     from trainer import train_callback, generate_init_weight
@@ -189,7 +191,7 @@ def main(config):
 
     # omegaconf tuple stuff
     dc = config.data
-    tokenizer = MMM(params="/home/christian/MIDI-RWKV/src/tokenizer/tokenizer_with_acs.json")  # MMM(TokenizerConfig(**deepcopy(TOKENIZER_PARAMS)))
+    tokenizer = MMM(params=dc.tokenizer_path)  # MMM(TokenizerConfig(**deepcopy(TOKENIZER_PARAMS)))
     dc.tracks_selection_random_ratio_range = (0.4, 1)
     dc.ratios_range_bar_infilling_duration = (0.1, 0.4)
     dc.acs_random_ratio_range = (0.05, 0.9)
@@ -198,7 +200,7 @@ def main(config):
     dc.data_augmentation_offsets = (6, 2, 0) 
 
     if not os.path.exists(dc.prefiltered_dataset_path):
-        ds = load_dataset("parquet", data_files={"train": "/home/christian/MMM/data/GigaMIDI/all-instruments-with-drums/train.parquet"})
+        ds = load_dataset("parquet", data_files={"train": dc.otherwise_train_data_path})
         ds = ds.filter(
             lambda ex: is_score_valid(
                 ex["music"], dc.min_num_bars_file_valid, dc.min_num_notes_file_valid
