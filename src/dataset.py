@@ -55,36 +55,38 @@ class DataCollatorNoneFilter:
         input_ids = collated_batch["input_ids"]
         labels = collated_batch["labels"]
         batch_size, seq_len = input_ids.size()
-        print(collated_batch)
-        print(seq_len)
-        first_row_input_ids = collated_batch['input_ids'][0]
-        first_row_labels = collated_batch['labels'][0]
+        labels_bsz, labels_seq_len = labels.size()
+        # print(collated_batch)
+        # print(seq_len)
+        # first_row_input_ids = collated_batch['input_ids'][0]
+        # first_row_labels = collated_batch['labels'][0]
 
-        # Print the full tensors without truncation
-        print("First row of input_ids:")
-        print(first_row_input_ids.tolist())  # Convert to list for complete printing
+        # # Print the full tensors without truncation
+        # print("First row of input_ids:")
+        # print(first_row_input_ids.tolist())  # Convert to list for complete printing
 
-        print("\nFirst row of labels:")
-        print(first_row_labels.tolist())  # Convert to list for complete printing
+        # print("\nFirst row of labels:")
+        # print(first_row_labels.tolist())  # Convert to list for complete printing
         
         # Pad to the fixed length if needed
         if seq_len < self.max_length:
-            padding_len = self.max_length - seq_len
-            
-            # Pad the input_ids tensor
+            padding_len = self.max_length - seq_len           
             padding = torch.full((batch_size, padding_len), self.pad_token_id, 
                                 dtype=input_ids.dtype, device=input_ids.device)
             input_ids = torch.cat([input_ids, padding], dim=1)
-            
-            # For labels, use -100 for padding positions
-            label_padding = torch.full((batch_size, padding_len), -100, 
-                                      dtype=labels.dtype, device=labels.device)
-            labels = torch.cat([labels, label_padding], dim=1)
         elif seq_len > self.max_length:
             # Truncate if sequence is longer than max_length
             input_ids = input_ids[:, :self.max_length]
+
+        if labels_seq_len < self.max_length:
+            padding_len = self.max_length - labels_seq_len
+            label_padding = torch.full((labels_bsz, padding_len), -100, 
+                                      dtype=labels.dtype, device=labels.device)
+            labels = torch.cat([labels, label_padding], dim=1)
+        elif labels_seq_len > self.max_length:
+            # Truncate if sequence is longer than max_length
             labels = labels[:, :self.max_length]
-        
+
         # Return just the input_ids and labels as a tuple
         return input_ids, labels
 
@@ -556,7 +558,7 @@ class MIDIDataset(DatasetMIDI):
 
             # Extract the tokens of the section to infill and add BarFill start/end
             seq_infill = sequences[track_infilling_idx][token_idx_start:token_idx_end]
-            seq_infill.ids.insert(0, self._infill_bar_start_token_id)
+            # seq_infill.ids.insert(0, self._infill_bar_start_token_id)
             seq_infill.ids.append(self._infill_bar_end_token_id)
             # TODO: short term solution: shouldn't you do multiple bar_infills per track?
             labels = seq_infill
@@ -567,6 +569,11 @@ class MIDIDataset(DatasetMIDI):
                 seq_before.ids.append(self._infill_bar_token_id)
             seq_after = sequences[track_infilling_idx][token_idx_end:]
             sequences[track_infilling_idx] = seq_before + seq_after
+
+            # TODO: does this work? need to get it to put infill start (wait, do you?)
+            # take a page out of inference.py
+            sequences.append(TokSequence(ids=[self._infill_bar_start_token_id]))
+
         # an `Infill_Track` token is appended to the input sequence
         else:
             # There are always at least two sequences
