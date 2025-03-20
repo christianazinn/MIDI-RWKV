@@ -55,6 +55,17 @@ class DataCollatorNoneFilter:
         input_ids = collated_batch["input_ids"]
         labels = collated_batch["labels"]
         batch_size, seq_len = input_ids.size()
+        print(collated_batch)
+        print(seq_len)
+        first_row_input_ids = collated_batch['input_ids'][0]
+        first_row_labels = collated_batch['labels'][0]
+
+        # Print the full tensors without truncation
+        print("First row of input_ids:")
+        print(first_row_input_ids.tolist())  # Convert to list for complete printing
+
+        print("\nFirst row of labels:")
+        print(first_row_labels.tolist())  # Convert to list for complete printing
         
         # Pad to the fixed length if needed
         if seq_len < self.max_length:
@@ -154,7 +165,6 @@ class MIDIDataset(DatasetMIDI):
         sample_key_name: str = "input_ids",
         decoder_key_name: str = "decoder_input_ids",
         labels_key_name: str = "labels",
-        seq2seq: bool = False,
     ) -> None:
         self._dataset = dataset
         self.ratio_random_tracks_range = ratio_random_tracks_range
@@ -167,7 +177,6 @@ class MIDIDataset(DatasetMIDI):
         self.bar_fill_ratio = bar_fill_ratio
         self.bar_masking_duration_ratio_range = bar_masking_duration_ratio_range
         self.ac_random_ratio_range = ac_random_ratio_range
-        self.seq2seq = seq2seq
 
         # Infill tokens, set as attribute here to avoid to access to vocab dic
         self._infill_bar_token_id = tokenizer.vocab["Infill_Bar"]
@@ -232,39 +241,22 @@ class MIDIDataset(DatasetMIDI):
         # we might want to catch them to fix them instead of skipping the iteration.
         try:
             score = Score.from_midi(self._dataset[idx]["music"])
-        except SCORE_LOADING_EXCEPTION as e:
-            #raise e
-            item = {self.sample_key_name: None, self.labels_key_name: None}
-            if self.seq2seq:
-                item[self.decoder_key_name] = None
-            return item
+        except SCORE_LOADING_EXCEPTION:
+            return {self.sample_key_name: None, self.labels_key_name: None}
 
         # Tokenize the score
         try:
-            tseq, decoder_input_ids = self.old_tokenize_score(score)
-        except IndexError as e:
-            #raise e
-            item = {self.sample_key_name: None, self.labels_key_name: None}
-            if self.seq2seq:
-                item[self.decoder_key_name] = None
-            return item
-        if tseq is None:
-            #raise RuntimeError("whoa, tseq is none")
-            item = {self.sample_key_name: None, self.labels_key_name: None}
-            if self.seq2seq:
-                item[self.decoder_key_name] = None
-            return item
+            inputs, labels = self._tokenize_score(score)
+        except IndexError:
+            return {self.sample_key_name: None, self.labels_key_name: None}
+        if inputs is None:
+            return {self.sample_key_name: None, self.labels_key_name: None}
 
         # If not one_token_stream, we only take the first track/sequence
-        token_ids = tseq.ids if self.tokenizer.one_token_stream else tseq[0].ids
+        input_ids = inputs.ids if self.tokenizer.one_token_stream else inputs[0].ids
+        label_ids = labels.ids if self.tokenizer.one_token_stream else labels[0].ids
 
-        item = {self.sample_key_name: LongTensor(token_ids)}
-
-        if self.seq2seq:
-            item[self.decoder_key_name] = LongTensor(decoder_input_ids.ids)
-            item[self.labels_key_name] = item[self.decoder_key_name].clone()
-        else:
-            item[self.labels_key_name] = item[self.sample_key_name].clone()
+        item = {self.sample_key_name: LongTensor(input_ids), self.labels_key_name: LongTensor(label_ids)}
 
         # Set ids of elements to discard to -100
         idx_tokens_to_discard = isin(
@@ -274,512 +266,6 @@ class MIDIDataset(DatasetMIDI):
         return item
 
     def _tokenize_score(
-        self, score: Score
-    ) -> tuple[TokSequence, TokSequence | None] | tuple[None, None]:
-
-        debug = False
-
-        # Delete unused elements in order to compute the bar ticks that we will use,
-        # otherwise if unused elements are at the end of the score they can give us
-        # bar ticks exceeding the tokens
-        score.markers = []
-        score.key_signatures = []
-        for track in score.tracks:
-            track.controls = []
-            track.lyrics = []
-            if not self.tokenizer.config.use_sustain_pedals:
-                track.pedals = []
-            if not self.tokenizer.config.use_pitch_bends:
-                track.pitch_bends = []
-
-        # Select k tracks (shuffled)
-        num_tracks_to_keep = max(
-            1, round(len(score.tracks) * uniform(*self.ratio_random_tracks_range))
-        )
-        bars_ticks = np.array(get_bars_ticks(score))  # always at least two bars
-        tracks_idx_ok = [
-            idx
-            for idx in range(len(score.tracks))
-            if len(score.tracks[idx].notes) > 0
-               and score.tracks[idx].notes[-1].time > bars_ticks[1]
-        ]  # always at least one
-        # Initialize the list to store the selected indices
-
-        selected_tracks = [] # Just for debugging purposes
-
-        # Select random indices for the tracks
-        score.tracks = [
-            score.tracks[idx]
-            for idx in sample(
-                tracks_idx_ok, k=min(num_tracks_to_keep, len(tracks_idx_ok))
-            )
-            if selected_tracks.append(idx) or True  # Save each selected index
-        ]
-
-        #print(selected_tracks)
-
-        # Remove time signatures and tempos occurring after the start of the last note
-        max_note_time = 0
-        for track in score.tracks:
-            if len(track.notes) > 0:
-                max_note_time = max(max_note_time, track.notes[-1].time)
-        for ti in reversed(range(len(score.time_signatures))):
-            if score.time_signatures[ti].time > max_note_time:
-                del score.time_signatures[ti]
-            else:
-                break
-        for ti in reversed(range(len(score.tempos))):
-            if score.tempos[ti].time > max_note_time:
-                del score.tempos[ti]
-            else:
-                break
-
-        # Augment and preprocess the music.
-        # We need to preprocess it here as we require it preprocessed to select the
-        # bars and tracks indexes for attribute controls before tokenizing.
-        # score = self.augment_and_preprocess_score(score)
-        score = self.tokenizer.preprocess_score(score)
-        if len(score.tracks) == 0:
-            return None, None
-
-        # Set bar infilling or new track gen + their indexes
-        # If there is only one track, we do bar infilling as new track gen is not
-        # possible in seq2seq.
-        bar_infilling = len(score.tracks) == 1 or random() < self.bar_fill_ratio
-        track_infilling_idx = None
-        bar_infilling_start_idx, bar_infilling_end_idx, infill_section_num_bars = None, None, None # noqa: E501
-
-
-        if bar_infilling:
-            track_infilling_idx = choice(list(range(len(score.tracks))))
-            # ac_indexes contains random bar acs only for the section to infill
-            bars_ticks = np.array(get_bars_ticks(score))  # need to recompute (resample)
-            bars_ticks = bars_ticks[  # remove bars ticks after end of track
-                np.where(bars_ticks <= score.tracks[track_infilling_idx].notes[-1].time)
-            ]
-
-            # Generate a random number between 1 and 20
-            #infill_section_num_bars = random.randint(1, self.max_bar_infilling_length)
-
-            #if infill_section_num_bars > len(bars_ticks):
-            #    infill_section_num_bars = random.randint(1, 4)
-
-            infill_section_num_bars = max(
-                1,
-                round(
-                    len(bars_ticks) * uniform(0.1,0.4)
-                ),
-            )
-
-            with open(f"{SLURM_OUT_INFO_BASE_DIR}/num_bars_infilling.txt", "a") as f:
-                f.write(f"{infill_section_num_bars}\n")
-
-            #print (infill_section_num_bars)
-
-            if infill_section_num_bars == len(bars_ticks):
-                # Special case where the portion to mask == the whole music
-                bar_infilling_start_idx = 0
-            else:
-                bar_infilling_start_idx = choice(
-                    list(range(len(bars_ticks) - infill_section_num_bars))
-                )
-            bar_infilling_end_idx = bar_infilling_start_idx + infill_section_num_bars
-
-            acs_idx = self._ac_bars
-
-            # Remove pitch control
-            del acs_idx[1]
-
-            # If the track is a drum track, keep only note density attrbiute control
-            if score.tracks[track_infilling_idx].is_drum:
-                acs_idx = [
-                    ac_idx
-                    for ac_idx in acs_idx
-                    if self.tokenizer.attribute_controls[ac_idx].__class__.__name__
-                       == "BarNoteDensity"
-                ]
-
-            # Get indices of bars to compute attribute controls on
-            # (= all the bars we want to infill)
-            ac_indexes = {
-                track_infilling_idx: {
-                    ac_idx: list(range(
-                                bar_infilling_start_idx,
-                                bar_infilling_end_idx if bar_infilling_end_idx
-                                else len(bars_ticks),
-                            )
-                        )
-                    for ac_idx in acs_idx
-                }
-            }
-        else:
-            whole_track_infilling_idx = choice(list(range(len(score.tracks))))
-
-            # Indeces of tracks attribute controls
-            acs_idx = self._ac_tracks
-            # Compute all attribute controls on all tracks
-            # We keep only note density and repetition attributes on drum tracks
-            ac_indexes = {
-              track_idx: {
-                  ac_idx: True
-                  for ac_idx in (
-                      acs_idx
-                      # If not a drum track, keep all
-                      if not score.tracks[track_idx].is_drum
-                      else [ac for ac in acs_idx if
-                            self.tokenizer.attribute_controls[ac].__class__.__name__
-                            in {"TrackNoteDensity", "TrackRepetition"}]
-
-                  )
-              }
-              for track_idx in range(len(score.tracks))
-            }
-            #print(ac_indexes)
-
-        # Tokenize it
-        sequences = self.tokenizer.encode(
-            score,
-            no_preprocess_score=True,
-            attribute_controls_indexes=ac_indexes,
-            concatenate_track_sequences=False,
-        )
-
-        if(debug):
-
-            with open("before_window_creation.txt", "w") as file:
-                # Write each item in the list on a new line
-                seq_number = 0
-                for sequence in sequences:
-                    file.write(str(len(sequence.ids)) + "\n")
-                    bar_counter = 0
-                    for item in sequence.tokens:
-                        if item == "Bar_None":
-                            file.write(str(item) + f"{seq_number}_{bar_counter}\n")
-                            bar_counter += 1
-                        else:
-                            file.write(str(item) + "\n")
-                    seq_number += 1
-
-        # Select the chunk of tokens to proceed with based on the sequence length
-        # Get the indexes of the token ids from which new bars begin
-        # This can unfortunately remove tempos events as they do not begin at each bar.
-
-        # Effective max_seq_len considering Track_Start/End tokens for the portion to
-        # infill. First we check if we can keep all the tokens
-        # to condition our generation...
-        # TODO: Ask Nathan why this -2.
-        max_seq_len_effective = self.max_seq_len - 2
-        if bar_infilling:  # n Infill_Bar + FillBar_Start/End tokens
-            max_seq_len_effective -= infill_section_num_bars + 2
-        elif self.seq2seq:  # Infill_Track
-            max_seq_len_effective -= 1
-
-        # ... If not, create the window
-        if sum(len(seq) for seq in sequences) > max_seq_len_effective:
-            # max_seq_len_effective will be used to extract tokens within each seq
-            # To extract the right number of tokens, we need to decrement it to
-            # consider the Track_Start/Program/Track_End tokens, and Infill tokens
-            max_seq_len_effective = self.max_seq_len - 3 * len(sequences)
-            if bar_infilling:  # n Infill_Bar + FillBar_Start/End tokens
-                max_seq_len_effective -= infill_section_num_bars + 2
-
-            # Fast way to get the position of bar tokens inside sequences.
-            # We check if the bar token byte is inside the BPE token.
-            # TODO: ask Nathan why the [:2]
-            bar_tokens_idxs_per_seq = [
-                [
-                    i
-                    for i in range(len(seq))
-                    if self._bar_token_byte
-                       in self.tokenizer._model.id_to_token(seq.ids[i])[:2]
-                ]
-                for seq in sequences
-            ]
-            num_bars_per_seq = max(len(seq) for seq in bar_tokens_idxs_per_seq)
-            # Count the number of tokens making each bar
-            bars_num_tokens_per_seq = []  # (S, B*)
-            for bar_tokens_idxs, seq in zip(bar_tokens_idxs_per_seq, sequences):
-                """# The first values are set to 0 to include the first tokens
-                if len(bar_tokens_idxs) > 0:
-                    bar_tokens_idxs[0] = 0"""
-                num_tokens_bar = (
-                    [
-                        bar_tokens_idxs[i] - bar_tokens_idxs[i - 1]
-                        for i in range(1, len(bar_tokens_idxs))
-                    ]
-                    if len(bar_tokens_idxs) > 1
-                    else []
-                )
-                num_tokens_bar.append(
-                    len(seq.ids) - bar_tokens_idxs[-1]
-                )  # num tokens last bar
-                bars_num_tokens_per_seq.append(num_tokens_bar)
-            # Here we get the number of tokens
-            # for each bar summed over each track.
-            bars_num_tokens = [  # (B)
-                sum(
-                    seq[bar_num] if len(seq) > bar_num else 0
-                    for seq in bars_num_tokens_per_seq
-                )
-                for bar_num in range(num_bars_per_seq)
-            ]
-            # Select the beginning (first bar) of the chunk to return
-            # If bar infilling, we make sure to keep the part to infill
-            if bar_infilling:
-                # Computing number of cumulative tokens from the last bar to infill
-                # to the beginning of the song. This is done on bars_num_tokens, so
-                # this is computed along the
-                # [. . . . . bar_infilling_start_idx ... bar_infilling_end_idx . . . .]
-                # ^ - - - - - - - - - - - - - - - - - - - - - - - - ^
-                cumsum_end = np.cumsum(
-                    np.flip(np.array(bars_num_tokens[: bar_infilling_end_idx + 1]))
-                )
-                # Here we get the minimum bar index we can use not to exceed
-                # the max_seq_len value. If the highest value of cumsum_end is
-                # lower than max_seq_value, it will be 0 (i.e. we consider every
-                # bar from the beginning to bar_infilling_end_idx.
-                min_bar_context_start_idx = (
-                        bar_infilling_end_idx
-                        - len(np.nonzero(cumsum_end < max_seq_len_effective)[0])
-                        + 1
-                )
-                if min_bar_context_start_idx >= bar_infilling_start_idx:
-                    # The length of the portion to infill exceed the limit, so we reduce
-                    # it so that one half is context and the other is to generate.
-                    bar_infilling_start_idx = (
-                            min_bar_context_start_idx +
-                            (bar_infilling_end_idx - min_bar_context_start_idx) // 2
-                    )
-                    max_bar_start_idx = (
-                            min_bar_context_start_idx +
-                            (bar_infilling_start_idx - min_bar_context_start_idx) // 2
-                    )
-                    infill_section_num_bars = (bar_infilling_end_idx -
-                                               bar_infilling_start_idx)
-                else:
-                    max_bar_start_idx = bar_infilling_start_idx
-            # We discard the bars at the end (to maximize the chunk sequence length) and
-            # the bars whose number of tokens exceed the limit.
-            # TODO: Ask nathan why we don't consider the context that
-            #   comes after the end of the infilling region
-            else:
-                min_bar_context_start_idx = 0
-                cumsum_inv = np.cumsum(np.flip(np.array(bars_num_tokens)))
-                max_bar_start_idx = num_bars_per_seq - len(
-                    np.nonzero(cumsum_inv < max_seq_len_effective)[0]
-                )
-
-            # TODO: This process is different from what's happening in
-            # Jeff's MMM. Here we randomly pick a bar index between
-            # min_bar_context_start_idx and the start of the infilling part, while
-            # we could maybe consider half context at left and half context
-            # at right wrt the infilling zone.
-            population = [
-                idx
-                for idx in range(min_bar_context_start_idx, max_bar_start_idx + 1)
-                if bars_num_tokens[idx] < max_seq_len_effective
-            ]
-            bar_start_idx = choice(population)
-            cumsum_start = np.cumsum(bars_num_tokens[bar_start_idx:])
-            bar_end_idx = (
-                num_bars_per_seq - 1
-                if cumsum_start[-1] < max_seq_len_effective
-                else bar_start_idx
-                     + np.nonzero(cumsum_start >= max_seq_len_effective)[0][0]
-                     - 1
-            )
-
-            # log info to files
-            if(bar_infilling):
-                with open(f"{SLURM_OUT_INFO_BASE_DIR}/"
-                          f"num_context_bars_infilling.txt", "a") as f:
-                    value = bar_end_idx - bar_start_idx - infill_section_num_bars
-                    f.write(f"{value}\n")
-            else:
-                with open(f"{SLURM_OUT_INFO_BASE_DIR}/"
-                          f"num_bars_track_infilling.txt", "a") as f:
-                    f.write(f"{bar_end_idx - bar_start_idx}\n")
-
-            # Decrease bar idx to infill
-            if bar_infilling:
-                bar_infilling_start_idx -= bar_start_idx
-                bar_infilling_end_idx -= bar_start_idx
-            # s_len = sum(bars_num_tokens[i] for i in range(bar_start_idx, bar_end_idx))
-            for i, (seq, bar_tokens_idxs) in reversed(
-                    list(enumerate(zip(sequences, bar_tokens_idxs_per_seq)))
-            ):
-                # If the sequence ends before the start of the portion to extract begins
-                # we remove it.
-                if len(bar_tokens_idxs) - 1 < bar_start_idx:
-                    del sequences[i], bar_tokens_idxs_per_seq[i]
-                    if self.seq2seq and len(sequences) == 1 and not bar_infilling:
-                        # We need at least two sequences to generate a new track in
-                        # seq2seq. If there is only one remaining left (because some
-                        # were deleted when handling the token sequence length above),
-                        # we skip this training sample. Resorting to bar infilling would
-                        # be possible by extracting the portion extracted here from the
-                        # score and recompute the bar indexes to infill.
-                        return None, None
-                    if track_infilling_idx and i < track_infilling_idx:
-                        track_infilling_idx -= 1
-                    continue
-
-                tok_idx_start = (
-                    0 if bar_tokens_idxs == 0 else bar_tokens_idxs[bar_start_idx]
-                )
-                tok_idx_end = (
-                    bar_tokens_idxs[bar_end_idx + 1]
-                    if bar_end_idx + 1 < len(bar_tokens_idxs)
-                    else -1
-                )
-                program_id = self.tokenizer.vocab[sequences[i].tokens[1]]
-
-                if debug and i == track_infilling_idx:
-                    ids = seq.ids[tok_idx_start:tok_idx_end]
-                    bytes_ = [self.tokenizer._model.id_to_token(id_) for id_ in ids]
-                    decoded_tokens = [
-                        self.tokenizer._vocab_learned_bytes_to_tokens[byte_]
-                        for byte_ in bytes_
-                    ]
-
-                    if debug:
-
-                        with open("infilling_section.txt", "w") as file:
-                            for id_, byte_, token_list in zip(ids, bytes_,
-                                                              decoded_tokens):
-                                # Join the list of tokens into a single string
-                                token_str = ", ".join(token_list)
-                                file.write(f"{id_} - {byte_} - [{token_str}]\n")
-
-                sequences[i] = TokSequence(
-                    ids=seq.ids[tok_idx_start:tok_idx_end], are_ids_encoded=True
-                )
-                # Add Track_Start, Program and Track_End tokens
-                sequences[i].ids.insert(0, self._track_start_token_id)
-                sequences[i].ids.insert(1, program_id)
-
-                #Add track attribute controls
-                if not bar_infilling:
-                    for j in range(len(seq)):
-                      if (self._bar_token_byte in
-                              self.tokenizer._model.id_to_token(seq.ids[j])[:2]):
-                        first_bar_token_idx = j
-                        break
-                    track_acs = seq.ids[3:first_bar_token_idx]
-                    #print(track_acs)
-                    for ac in reversed(track_acs):  # Reverse to maintain order
-                      sequences[i].ids.insert(2, ac)
-
-                #Add Infill_Track token
-                if not bar_infilling and i == whole_track_infilling_idx:
-                  sequences[i].ids.insert(0, self._infill_track_token_id)
-
-                # Add track_end if bar_end_idx isn't the last bar as already included
-                if bar_end_idx + 1 < num_bars_per_seq:
-                    sequences[i].ids.append(self._track_end_token_id)
-                # For debug
-                if(debug):
-                    self.tokenizer.decode_token_ids(sequences[i])
-                    #self.tokenizer.complete_sequence(sequences[i])
-
-            # seq_len_final = sum(len(seq) for seq in sequences)
-
-        # -------- WINDOW CREATION FINISHED ----------- #
-        if debug:
-            with open("after_window_creation.txt", "w") as file:
-                # Write each item in the list on a new line
-                seq_number = 0
-                for sequence in sequences:
-                    file.write(str(len(sequence.ids)) + "\n")
-                    bar_counter = 0
-                    for item in sequence.tokens:
-                        if item == "Bar_None":
-                            file.write(str(item) + f"{seq_number}_{bar_counter}\n")
-                            bar_counter += 1
-                        file.write(str(item) + "\n")
-                    seq_number += 1
-
-        # If doing bar infilling we place extract the bars and create place the
-        # right infilling tokens
-        # Otherwise (track infilling), there is nothing to do here. If a user wants to
-        # create a new track, we'll just have to add Track_Start and Program tokens at
-        # the end of the sequence and generate from here.
-        decoder_input = None
-        if bar_infilling:
-            # Bar infilling
-            # Extract token section of the bars to infill
-            # We do not select tracks that end before bar_tick_start
-            bar_tokens_idxs = [
-                i
-                for i in range(len(sequences[track_infilling_idx]))
-                if self._bar_token_byte
-                   in self.tokenizer._model.id_to_token(
-                    sequences[track_infilling_idx].ids[i]
-                )[:2]
-            ]
-            # token_idx_start excludes Track_Start and attribute control token
-            token_idx_start = bar_tokens_idxs[bar_infilling_start_idx]
-            # excluding Track_End if last bar
-            token_idx_end = (
-                -1
-                if bar_infilling_end_idx >= len(bar_tokens_idxs) - 1
-                else bar_tokens_idxs[bar_infilling_end_idx]
-            )
-
-            # Extract the tokens of the section to infill and add BarFill start/end
-            seq_infill = sequences[track_infilling_idx][token_idx_start:token_idx_end]
-            seq_infill.ids.insert(0, self._infill_bar_start_token_id)
-            seq_infill.ids.append(self._infill_bar_end_token_id)
-            # seq2seq --> decoder infill / concat seq before after
-            if self.seq2seq:
-                decoder_input = seq_infill
-            else:
-                # Adding it at the end of the list that will be flattened
-                sequences.append(seq_infill)
-
-            # Add BarInfill tokens + update sequences
-            seq_before = sequences[track_infilling_idx][:token_idx_start]
-            for _ in range(infill_section_num_bars):
-                seq_before.ids.append(self._infill_bar_token_id)
-            seq_after = sequences[track_infilling_idx][token_idx_end:]
-            sequences[track_infilling_idx] = seq_before + seq_after
-        # If seq2seq, the last track sequence is fed to the decoder and a `Infill_Track`
-        # token is appended to the encoder input sequence
-        elif self.seq2seq:
-            # There are always at least two sequences
-            decoder_input = sequences.pop(-1)
-            sequences[-1].ids.append(self._infill_track_token_id)
-        else:
-          #Move infill_track sequence at the end
-          for i, seq in enumerate(sequences):
-              #print(seq.tokens)
-              if seq.tokens[0] == "Infill_Track":  # Check if first token
-                  # is "Infill_Track"
-                  sequences.append(sequences.pop(i))  # Move it to the end
-                  break  # Stop after the first match
-
-        # TODO External labels: (non-)expressive, loops, genres to add to the seq
-
-        #for i, seq in enumerate(sequences):
-        #    print(seq.tokens)
-
-        tokseq = concat_tokseq(sequences)
-        # No need to call self._preprocess_token_ids as there are no BOS/EOS tokens and
-        # that the sequence le  ngth does not exceed the limit as handled above.
-
-        self.tokenizer.decode_token_ids(tokseq)
-
-        tokseq_tokens = self.tokenizer._ids_to_tokens(tokseq)
-
-        if debug:
-            with open("output.txt", "w") as file:
-                for item in tokseq_tokens:
-                    file.write(str(item) + "\n")
-
-        return tokseq, decoder_input
-
-
-    def old_tokenize_score(
         self, score: Score
     ) -> tuple[TokSequence, TokSequence | None] | tuple[None, None]:
         # Delete unused elements in order to compute the bar ticks that we will use,
@@ -837,8 +323,7 @@ class MIDIDataset(DatasetMIDI):
             return None, None
 
         # Set bar infilling or new track gen + their indexes
-        # If there is only one track, we do bar infilling as new track gen is not
-        # possible in seq2seq.
+        # If there is only one track, we do bar infilling as new track gen is not possible.
         bar_infilling = len(score.tracks) == 1 or random() < self.bar_fill_ratio
         track_infilling_idx = None
         bar_idx_start, bar_idx_end, infill_section_num_bars = None, None, None
@@ -915,7 +400,7 @@ class MIDIDataset(DatasetMIDI):
         max_seq_len_effective = self.max_seq_len - 2
         if bar_infilling:  # n Infill_Bar + FillBar_Start/End tokens
             max_seq_len_effective -= infill_section_num_bars + 2
-        elif self.seq2seq:  # Infill_Track
+        else:  # Infill_Track
             max_seq_len_effective -= 1
         if sum(len(seq) for seq in sequences) > max_seq_len_effective:
             # max_seq_len_effective will be used to extract tokens within each seq
@@ -1016,14 +501,6 @@ class MIDIDataset(DatasetMIDI):
                 # we remove it.
                 if len(bar_tokens_idx) - 1 < bar_start_idx:
                     del sequences[i], bar_tokens_idx_per_seq[i]
-                    if self.seq2seq and len(sequences) == 1 and not bar_infilling:
-                        # We need at least two sequences to generate a new track in
-                        # seq2seq. If there is only one remaining left (because some
-                        # were deleted when handling the token sequence length above),
-                        # we skip this training sample. Resorting to bar infilling would
-                        # be possible by extracting the portion extracted here from the
-                        # score and recompute the bar indexes to infill.
-                        return None, None
                     if track_infilling_idx and i < track_infilling_idx:
                         track_infilling_idx -= 1
                     continue
@@ -1055,7 +532,7 @@ class MIDIDataset(DatasetMIDI):
         # Otherwise (track infilling), there is nothing to do here. If a user wants to
         # create a new track, we'll just have to add Track_Start and Program tokens at
         # the end of the sequence and generate from here.
-        decoder_input = None
+        labels = None
         if bar_infilling:
             # Bar infilling
             # Extract token section of the bars to infill
@@ -1081,12 +558,8 @@ class MIDIDataset(DatasetMIDI):
             seq_infill = sequences[track_infilling_idx][token_idx_start:token_idx_end]
             seq_infill.ids.insert(0, self._infill_bar_start_token_id)
             seq_infill.ids.append(self._infill_bar_end_token_id)
-            # seq2seq --> decoder infill / concat seq before after
-            if self.seq2seq:
-                decoder_input = seq_infill
-            else:
-                # Adding it at the end of the list that will be flattened
-                sequences.append(seq_infill)
+            # TODO: short term solution: shouldn't you do multiple bar_infills per track?
+            labels = seq_infill
 
             # Add BarInfill tokens + update sequences
             seq_before = sequences[track_infilling_idx][:token_idx_start]
@@ -1094,21 +567,21 @@ class MIDIDataset(DatasetMIDI):
                 seq_before.ids.append(self._infill_bar_token_id)
             seq_after = sequences[track_infilling_idx][token_idx_end:]
             sequences[track_infilling_idx] = seq_before + seq_after
-        # If seq2seq, the last track sequence is fed to the decoder and a `Infill_Track`
-        # token is appended to the encoder input sequence
-        elif self.seq2seq:
+        # an `Infill_Track` token is appended to the input sequence
+        else:
             # There are always at least two sequences
-            decoder_input = sequences.pop(-1)
+            labels = sequences.pop(-1)
             sequences[-1].ids.append(self._infill_track_token_id)
 
         # TODO External labels: (non-)expressive, loops, genres to add to the seq
 
-        # Preprocessing token ids: reduce sequence length, add BOS/EOS tokens
-        tokseq = concat_tokseq(sequences)
+        inputs = concat_tokseq(sequences)
+        # concat the actual labels at the end of the input
+        labels = inputs + labels
         # No need to call self._preprocess_token_ids as there are no BOS/EOS tokens and
         # that the sequence length does not exceed the limit as handled above.
 
-        return tokseq, decoder_input
+        return inputs, labels
 
     def augment_and_preprocess_score(self, score: Score) -> Score:
         """
@@ -1139,5 +612,5 @@ class MIDIDataset(DatasetMIDI):
         """
         return len(self._dataset)
 
-    def __str__(self) -> str:
+    def __str__(self) -> str:  # noqa:D105
         return f"{len(self)} samples."

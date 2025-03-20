@@ -1,3 +1,6 @@
 [submodule "rwkv.cpp"]
 	path = rwkv.cpp
 	url = git@github.com:christianazinn/rwkv.cpp.git
+[submodule "flash-linear-attention"]
+	path = flash-linear-attention
+	url = https://github.com/fla-org/flash-linear-attention.git

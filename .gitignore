@@ -3,3 +3,5 @@ wandb/
 __pycache__/
 data/
 outputs/
+*.png
+*.wav

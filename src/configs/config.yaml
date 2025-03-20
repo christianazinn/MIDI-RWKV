@@ -1,4 +1,4 @@
-load_model: "/home/christian/MIDI-RWKV/src/outputs/2025-03-19/12-50-35/out/rwkv-2.pth"  # if continuing: full path with .pth
+load_model: "" #  "/home/christian/MIDI-RWKV/src/outputs/2025-03-19/12-50-35/out/rwkv-2.pth"  # if continuing: full path with .pth
 wandb: "MIDI-RWKV"
 proj_dir: "out"
 random_seed: -1
