@@ -17,6 +17,7 @@ class train_callback(pl.Callback):
         self.weight_decay_final = ctr.weight_decay_final
         self.save_steps = ctr.save_steps
         self.epoch_save = ctr.epoch_save
+        self.best_val_loss = math.inf
 
     def on_train_batch_start(self, trainer, pl_module, batch, batch_idx):
         current_step = trainer.global_step
@@ -176,6 +177,54 @@ class train_callback(pl.Callback):
 
         torch.cuda.empty_cache()
         gc.collect()
+
+    def on_validation_start(self, trainer, pl_module):
+        if trainer.is_global_zero:
+            trainer.my_val_loss_sum = 0
+            trainer.my_val_loss_count = 0
+    
+    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
+        if trainer.is_global_zero:
+            val_loss = outputs['loss'].float().mean().item()
+            trainer.my_val_loss_sum += val_loss
+            trainer.my_val_loss_count += 1
+            
+    def on_validation_epoch_end(self, trainer, pl_module):
+        if trainer.is_global_zero and trainer.my_val_loss_count > 0:
+            val_epoch_loss = trainer.my_val_loss_sum / trainer.my_val_loss_count
+            val_ppl = math.exp(val_epoch_loss)
+            
+            # Log validation metrics
+            self.log("val_loss", val_epoch_loss, prog_bar=True, on_epoch=True, sync_dist=True)
+            self.log("val_ppl", val_ppl, prog_bar=True, on_epoch=True, sync_dist=True)
+            
+            # Log to wandb if configured
+            if self.config.wandb:
+                trainer.my_wandb.log({
+                    "val_loss": val_epoch_loss,
+                    "val_ppl": val_ppl
+                }, step=trainer.global_step)
+            
+            # Log to file
+            trainer.my_log.write(f"Validation Epoch {trainer.current_epoch}: " +
+                               f"val_loss={val_epoch_loss:.6f} val_ppl={val_ppl:.4f} " +
+                               f"time={datetime.datetime.now()}\n")
+            trainer.my_log.flush()
+            
+            # Save best model based on validation loss
+            if val_epoch_loss < self.best_val_loss:
+                self.best_val_loss = val_epoch_loss
+                if trainer.is_global_zero:
+                    to_save_dict = pl_module.state_dict()
+                    try:
+                        torch.save(
+                            to_save_dict,
+                            f"{self.config.proj_dir}/rwkv-best.pth",
+                        )
+                        trainer.my_log.write(f"Saved best model with val_loss={val_epoch_loss:.6f}\n")
+                        trainer.my_log.flush()
+                    except Exception as e:
+                        print('Error saving best model checkpoint:\n\n', e, '\n\n')
 
 
 @rank_zero_only

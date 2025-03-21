@@ -119,8 +119,8 @@ def main(config):
     args.enable_checkpointing = False
     args.replace_sampler_ddp = False
     args.logger = False
+    # Trainer.my_wandb does not yet exist on sanity validation
     args.num_sanity_val_steps = 0
-    args.check_val_every_n_epoch = int(1e20)
     args.log_every_n_steps = int(1e20)
     config.betas = (config.training.beta1, config.training.beta2)
     config.real_bsz = int(args.num_nodes) * int(args.devices) * config.training.micro_bsz
@@ -132,7 +132,7 @@ def main(config):
     if config.model.dim_ffn <= 0:
         config.model.dim_ffn = int((config.model.n_embd * 3.5) // 32 * 32)
 
-    config.run_name = f"{config.model.vocab_size} ctx{config.model.ctx_len} L{config.model.n_layer} D{config.model.n_embd}"
+    config.run_name = f"MIDI-RWKV ctx{config.model.ctx_len} L{config.model.n_layer} D{config.model.n_embd}"
     if not os.path.exists(config.proj_dir):
         os.makedirs(config.proj_dir)
 
@@ -192,6 +192,7 @@ def main(config):
     # omegaconf tuple stuff
     dc = config.data
     tokenizer = MMM(params=dc.tokenizer_path)  # MMM(TokenizerConfig(**deepcopy(TOKENIZER_PARAMS)))
+    config.model.vocab_size = tokenizer.vocab_size
     dc.tracks_selection_random_ratio_range = (0.4, 1)
     dc.ratios_range_bar_infilling_duration = (0.1, 0.4)
     dc.acs_random_ratio_range = (0.05, 0.9)
@@ -200,23 +201,35 @@ def main(config):
     dc.data_augmentation_offsets = (6, 2, 0) 
 
     if not os.path.exists(dc.prefiltered_dataset_path):
-        ds = load_dataset("parquet", data_files={"train": dc.otherwise_train_data_path})
+        ds = load_dataset("parquet", data_files={
+            "train": dc.otherwise_train_data_path,
+            "validation": dc.otherwise_val_data_path,
+        })
         ds = ds.filter(
             lambda ex: is_score_valid(
                 ex["music"], dc.min_num_bars_file_valid, dc.min_num_notes_file_valid
             )
-        )["train"]
-        
-        print(f"After initial filtering: {len(ds)} samples")
+        )
         
         # Save the filtered dataset
         ds.save_to_disk(dc.prefiltered_dataset_path)
         print("Filtered dataset saved to disk")
     else:
         ds = load_from_disk(dc.prefiltered_dataset_path)
-    
+
     train_data = MIDIDataset(
-                ds,
+                ds["train"],
+                tokenizer,
+                dc.max_seq_len,
+                dc.tracks_selection_random_ratio_range,
+                dc.data_augmentation_offsets,
+                dc.ratio_bar_infilling,
+                dc.ratios_range_bar_infilling_duration,
+                ac_random_ratio_range=dc.acs_random_ratio_range,
+                ac_tracks_random_ratio_range=dc.tracks_idx_random_ratio_range,
+                ac_bars_random_ratio_range=dc.bars_idx_random_ratio_range)
+    val_data = MIDIDataset(
+                ds["validation"],
                 tokenizer,
                 dc.max_seq_len,
                 dc.tracks_selection_random_ratio_range,
@@ -273,8 +286,9 @@ def main(config):
 
     # must set shuffle=False, persistent_workers=False (because worker is in another thread)
     data_loader = DataLoader(train_data, shuffle=False, pin_memory=True, batch_size=config.training.micro_bsz, num_workers=config.training.dataloader_num_workers, persistent_workers=False, drop_last=True, collate_fn=collator)
+    val_loader = DataLoader(val_data, shuffle=False, pin_memory=True, batch_size=config.training.micro_bsz, num_workers=config.training.dataloader_num_workers, persistent_workers=False, drop_last=True, collate_fn=collator, prefetch_factor=6)
 
-    trainer.fit(model, data_loader)
+    trainer.fit(model, data_loader, val_loader)
 
 
 if __name__ == "__main__":

@@ -278,7 +278,8 @@ def infill_bars(
         )[0]
         # bar_none_token_idxs[-1] because we must exclude the last BarNone token,
         # which is used by the logits processor to stop generation
-        # print(generated_tokens.ids)
+        print(generated_tokens.ids)
+        print(generated_tokens.tokens)
         if len(bar_none_token_idxs > 0):
             generated_tokens.ids = generated_tokens.ids[
                 bar_none_token_idxs[0] : bar_none_token_idxs[-1]
@@ -300,7 +301,7 @@ def _adapt_prompt_for_bar_infilling(
     track_idx: int,
     tokens: list[TokSequence],
     subset_bars_to_infill: tuple[int, int, list[str]],
-    num_context_bars: int = 4,
+    num_context_bars: int = 8,
 ) -> TokSequence:
     """
     Construct the prompt for bar infilling.
@@ -409,7 +410,7 @@ if __name__ == "__main__":
     from pathlib import Path
     INFERENCE_CONFIG = InferenceConfig(
         {
-            2: [(12, 14, ["ACBarNoteDensity_6", "ACBarNoteDurationEight_1"])],
+            2: [(14, 16, ["ACBarNoteDensity_6", "ACBarNoteDurationEight_1"])],
         },
         [
         #     (43, ["ACBarPitchClass_3"]),

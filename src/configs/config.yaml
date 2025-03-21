@@ -1,4 +1,4 @@
-load_model: "" #  "/home/christian/MIDI-RWKV/src/outputs/2025-03-19/12-50-35/out/rwkv-2.pth"  # if continuing: full path with .pth
+load_model: "" # "/home/christian/MIDI-RWKV/src/outputs/2025-03-20/GOOD/out/rwkv-21.pth"  # if continuing: full path with .pth
 wandb: "MIDI-RWKV"
 proj_dir: "out"
 random_seed: -1
@@ -20,13 +20,11 @@ trainer:
     strategy: "deepspeed_stage_2"
 
 model:
-    # TODO configure data input
-    # TODO validation set?
-    vocab_size: 16000  # TODO this should be set automatically from your tokenizer!!!
-    ctx_len: 2048  # TODO tune me
+    vocab_size: # set automatically from tokenizer
+    ctx_len: 16384  # TODO modify me as you wish
 
-    n_layer: 8  # TODO tune me
-    n_embd: 512  # TODO tune me
+    n_layer: 8  # TODO modify me as you wish
+    n_embd: 512  # TODO modify me as you wish
     dim_att: 0  # 0 defaults to n_embd
     dim_ffn: 0  # 0 defautls to 3.5 * n_embd
 
@@ -62,6 +60,7 @@ training:
 data:
     prefiltered_dataset_path: /home/christian/MIDI-RWKV/src/data/prefiltered
     otherwise_train_data_path: /home/christian/MMM/data/GigaMIDI/all-instruments-with-drums/train.parquet
+    otherwise_val_data_path: /home/christian/MMM/data/GigaMIDI/all-instruments-with-drums/validation.parquet
     tokenizer_path: "/home/christian/MIDI-RWKV/src/tokenizer/tokenizer_with_acs.json"
     src_dir: "/home/christian/MIDI-RWKV/src"
 
