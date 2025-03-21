@@ -278,7 +278,7 @@ def infill_bars(
         )[0]
         # bar_none_token_idxs[-1] because we must exclude the last BarNone token,
         # which is used by the logits processor to stop generation
-        print(generated_tokens.ids)
+        # print(generated_tokens.ids)
         if len(bar_none_token_idxs > 0):
             generated_tokens.ids = generated_tokens.ids[
                 bar_none_token_idxs[0] : bar_none_token_idxs[-1]
@@ -424,15 +424,15 @@ if __name__ == "__main__":
             max_new_tokens=300,
         )
     
-    current_dir = Path(__file__).absolute()
+    current_dir = Path(__file__).absolute().parent
     TOK_PATH = current_dir.parent / "tokenizer/tokenizer_with_acs.json"
-    MODEL_PATH = "../outputs/outdir"
-    INPUT_PATH = current_dir / "mat/rollinggirlEDIT.mid"
-    OUTPUT_PATH = current_dir / "mat/output.mid"
-    OUTWAV_PATH = current_dir / "mat/output.wav"
-    INWAV_PATH = current_dir / "mat/input.wav"
-    OUTPR_PATH = current_dir / "mat/output.png"
-    INPR_PATH = current_dir / "mat/input.png"
+    MODEL_PATH = "../outputs/m2fla"
+    INPUT_PATH = str(current_dir / "mat/rollinggirlEDIT.mid")
+    OUTPUT_PATH = str(current_dir / "mat/output.mid")
+    OUTWAV_PATH = str(current_dir / "mat/output.wav")
+    INWAV_PATH = str(current_dir / "mat/input.wav")
+    OUTPR_PATH = str(current_dir / "mat/output.png")
+    INPR_PATH = str(current_dir / "mat/input.png")
     
     tokenizer = MMM(params=TOK_PATH)
     model = AutoModelForCausalLM.from_pretrained(MODEL_PATH).to("cuda")

@@ -11,7 +11,7 @@ run_name:
 
 trainer:
     gradient_clip_val: 1.0  # reduce it to 0.7 / 0.5 / 0.3 / 0.2 for problematic samples
-    max_epochs: 10
+    max_epochs: 30
 
     num_nodes: 1
     accelerator: "gpu"

@@ -256,7 +256,7 @@ class MIDIDataset(DatasetMIDI):
         input_ids = inputs.ids if self.tokenizer.one_token_stream else inputs[0].ids
         label_ids = labels.ids if self.tokenizer.one_token_stream else labels[0].ids
 
-        item = {self.sample_key_name: LongTensor(input_ids), self.labels_key_name: LongTensor(label_ids)}
+        item = {self.sample_key_name: LongTensor(input_ids)[:-1], self.labels_key_name: LongTensor(label_ids)[1:]}
 
         # Set ids of elements to discard to -100
         idx_tokens_to_discard = isin(
@@ -532,7 +532,6 @@ class MIDIDataset(DatasetMIDI):
         # Otherwise (track infilling), there is nothing to do here. If a user wants to
         # create a new track, we'll just have to add Track_Start and Program tokens at
         # the end of the sequence and generate from here.
-        labels = None
         if bar_infilling:
             # Bar infilling
             # Extract token section of the bars to infill
@@ -556,10 +555,9 @@ class MIDIDataset(DatasetMIDI):
 
             # Extract the tokens of the section to infill and add BarFill start/end
             seq_infill = sequences[track_infilling_idx][token_idx_start:token_idx_end]
-            # seq_infill.ids.insert(0, self._infill_bar_start_token_id)
+            seq_infill.ids.insert(0, self._infill_bar_start_token_id)
             seq_infill.ids.append(self._infill_bar_end_token_id)
-            # TODO: short term solution: shouldn't you do multiple bar_infills per track?
-            labels = seq_infill
+            sequences.append(seq_infill)
 
             # Add BarInfill tokens + update sequences
             seq_before = sequences[track_infilling_idx][:token_idx_start]
@@ -567,26 +565,20 @@ class MIDIDataset(DatasetMIDI):
                 seq_before.ids.append(self._infill_bar_token_id)
             seq_after = sequences[track_infilling_idx][token_idx_end:]
             sequences[track_infilling_idx] = seq_before + seq_after
-
-            # TODO: does this work? need to get it to put infill start (wait, do you?)
-            # take a page out of inference.py
-            sequences.append(TokSequence(ids=[self._infill_bar_start_token_id]))
-
         # an `Infill_Track` token is appended to the input sequence
         else:
             # There are always at least two sequences
-            labels = sequences.pop(-1)
-            sequences[-1].ids.append(self._infill_track_token_id)
+            sequences[-2].ids.append(self._infill_track_token_id)
 
         # TODO External labels: (non-)expressive, loops, genres to add to the seq
 
         inputs = concat_tokseq(sequences)
-        # concat the actual labels at the end of the input
-        labels = inputs + labels
         # No need to call self._preprocess_token_ids as there are no BOS/EOS tokens and
         # that the sequence length does not exceed the limit as handled above.
 
-        return inputs, labels
+        # TODO fuck me sideways the LM expects the labels to be shifted 1 over
+        # (this is done in __getitem__)
+        return inputs, inputs
 
     def augment_and_preprocess_score(self, score: Score) -> Score:
         """
