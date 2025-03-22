@@ -94,15 +94,16 @@ def main(config):
     from argparse import Namespace
     from pytorch_lightning import Trainer
     from pytorch_lightning.utilities import rank_zero_info
+    import torch
     import pytorch_lightning as pl
 
+    config.trainer.devices = torch.cuda.device_count()
     args = Namespace(**OmegaConf.to_container(config.trainer, resolve=True))
 
     ########################################################################################################
 
     import os, warnings, datetime
     import numpy as np
-    import torch
     from torch.utils.data import DataLoader
     import deepspeed
     from pytorch_lightning import seed_everything
@@ -162,9 +163,9 @@ def main(config):
     if config.training.lr_final == 0 or config.training.lr_init == 0:
         rank_zero_info("\n\nNote: lr_final = 0 or lr_init = 0. Using linear LR schedule instead.\n\n")
 
-    assert config.trainer.precision in ["tf32", "fp16", "bf16"]
+    assert config.trainer.precision in ["tf32", "16", "bf16"]
     os.environ["RWKV_FLOAT_MODE"] = config.trainer.precision
-    if config.trainer.precision == "fp16":
+    if config.trainer.precision == "16":
         rank_zero_info("\n\nNote: you are using fp16 (might overflow). Try bf16 / tf32 for stable training.\n\n")
 
     torch.backends.cudnn.benchmark = True
@@ -174,7 +175,7 @@ def main(config):
 
     if "32" in config.trainer.precision:
         config.trainer.precision = 32
-    elif config.trainer.precision == "fp16":
+    elif config.trainer.precision == "16":
         config.trainer.precision = 16
     else:
         config.trainer.precision = "bf16"
@@ -286,7 +287,7 @@ def main(config):
 
     # must set shuffle=False, persistent_workers=False (because worker is in another thread)
     data_loader = DataLoader(train_data, shuffle=False, pin_memory=True, batch_size=config.training.micro_bsz, num_workers=config.training.dataloader_num_workers, persistent_workers=False, drop_last=True, collate_fn=collator)
-    val_loader = DataLoader(val_data, shuffle=False, pin_memory=True, batch_size=config.training.micro_bsz, num_workers=config.training.dataloader_num_workers, persistent_workers=False, drop_last=True, collate_fn=collator, prefetch_factor=6)
+    val_loader = DataLoader(val_data, shuffle=False, pin_memory=True, batch_size=config.training.micro_bsz, num_workers=config.training.dataloader_num_workers, persistent_workers=False, drop_last=True, collate_fn=collator)
 
     trainer.fit(model, data_loader, val_loader)
 

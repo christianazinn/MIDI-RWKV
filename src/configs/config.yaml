@@ -1,5 +1,6 @@
 load_model: "" # "/home/christian/MIDI-RWKV/src/outputs/2025-03-20/GOOD/out/rwkv-21.pth"  # if continuing: full path with .pth
 wandb: "MIDI-RWKV"
+tensorboard: 1
 proj_dir: "out"
 random_seed: -1
 
@@ -15,13 +16,13 @@ trainer:
 
     num_nodes: 1
     accelerator: "gpu"
-    devices: 1  # TODO update per node
+    devices:  # will be autoset
     precision: "bf16"
     strategy: "deepspeed_stage_2"
 
 model:
     vocab_size: # set automatically from tokenizer
-    ctx_len: 16384  # TODO modify me as you wish
+    ctx_len: 8192  # TODO modify me as you wish
 
     n_layer: 8  # TODO modify me as you wish
     n_embd: 512  # TODO modify me as you wish
@@ -39,7 +40,10 @@ model:
 training:
     epoch_save: 1  # save per epochs
     save_steps: 0  # save per steps
-    micro_bsz: 2  # TODO modify on H100: bsz per GPU
+    micro_bsz: 4  # bsz per GPU
+    # 16384/8 or 8192/16 on 80GB
+    # 8192/4 on 24GB
+    # 8192/2 @ FP16 (precision: "16") on 16GB V100
 
     lr_schedule: "cosine"
     layerwise_lr: 1  # 1 = layerwise lr for faster convergence, slower it/s
@@ -49,7 +53,7 @@ training:
 
     beta1: 0.9   # ZeRO betas
     beta2: 0.99  # ZeRO betas
-    ds_bucket_mb: 20  # TODO modify on H100: ZeRO bucket size MB
+    ds_bucket_mb: 200  # ZeRO bucket size MB
 
     weight_decay: 0.01  # try 0.1
     weight_decay_final: -1
@@ -58,7 +62,8 @@ training:
 
 # TODO: omegaconf does not support tuples very well
 data:
-    src_dir: /app # /home/christian/MIDI-RWKV/src
+    # /app for docker
+    src_dir: /home/christian/MIDI-RWKV/src
     prefiltered_dataset_path: ${.src_dir}/data/prefiltered
     tokenizer_path: ${.src_dir}/tokenizer/tokenizer_with_acs.json
     # these should generally not be needed

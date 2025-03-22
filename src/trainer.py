@@ -82,7 +82,15 @@ class train_callback(pl.Callback):
                 pass
                 
             trainer.my_log.flush()
-            
+
+            if self.config.tensorboard:
+                self.tb_log_dir = f"{self.config.proj_dir}/tensorboard_logs"
+                from torch.utils.tensorboard import SummaryWriter
+                trainer.my_tb_logger = SummaryWriter(self.tb_log_dir)
+                print(f"TensorBoard logging enabled. Log directory: {self.tb_log_dir}")
+                trainer.my_log.write(f"TensorBoard logging enabled. Log directory: {self.tb_log_dir}\n")
+                trainer.my_log.flush()
+
             if self.config.wandb:
                 print("Login to wandb...")
                 import wandb
@@ -120,6 +128,14 @@ class train_callback(pl.Callback):
             # Standard logging
             self.log("lr", trainer.my_lr, prog_bar=True, on_step=True)
             self.log("loss", trainer.my_epoch_loss, prog_bar=True, on_step=True)
+
+            # Log to tensorboard if configured
+            if self.config.tensorboard and hasattr(trainer, 'my_tb_logger'):
+                trainer.my_tb_logger.add_scalar('training/loss', trainer.my_loss, trainer.global_step)
+                trainer.my_tb_logger.add_scalar('training/lr', trainer.my_lr, trainer.global_step)
+                trainer.my_tb_logger.add_scalar('training/weight_decay', trainer.my_wd, trainer.global_step)
+                trainer.my_tb_logger.add_scalar('performance/tokens_per_second', kt_s * 1000, trainer.global_step)
+                trainer.my_tb_logger.add_scalar('performance/Gtokens', trainer.global_step * token_per_step / 1e9, trainer.global_step)
 
             # Log to wandb if configured
             if self.config.wandb:
@@ -198,6 +214,11 @@ class train_callback(pl.Callback):
             self.log("val_loss", val_epoch_loss, prog_bar=True, on_epoch=True, sync_dist=True)
             self.log("val_ppl", val_ppl, prog_bar=True, on_epoch=True, sync_dist=True)
             
+            # Log to tensorboard if configured
+            if self.config.tensorboard and hasattr(trainer, 'my_tb_logger'):
+                trainer.my_tb_logger.add_scalar('validation/val_loss', val_epoch_loss, trainer.current_epoch)
+                trainer.my_tb_logger.add_scalar('validation/val_ppl', val_ppl, trainer.current_epoch)
+
             # Log to wandb if configured
             if self.config.wandb:
                 trainer.my_wandb.log({
@@ -226,6 +247,10 @@ class train_callback(pl.Callback):
                     except Exception as e:
                         print('Error saving best model checkpoint:\n\n', e, '\n\n')
 
+    def on_fit_end(self, trainer, pl_module):
+        # Close TensorBoard logger when training completes
+        if trainer.is_global_zero and self.config.tensorboard and hasattr(trainer, 'my_tb_logger'):
+            trainer.my_tb_logger.close()
 
 @rank_zero_only
 def generate_init_weight(model, init_weight_name):

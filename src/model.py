@@ -19,10 +19,16 @@ from torch.utils.cpp_extension import load
 HEAD_SIZE = int(os.environ["RWKV_HEAD_SIZE_A"])
 CHUNK_LEN = int(os.environ["RWKV_CHUNK_LEN"])
 SRC_DIR = os.environ["RWKV_SRC_DIR"]
+PRECISION = os.environ["RWKV_FLOAT_MODE"]
+
+if PRECISION == "bf16":
+    sources = [os.path.join(SRC_DIR, "cuda/wkv7_cuda.cu"), os.path.join(SRC_DIR, "cuda/wkv7_op.cpp")]
+else:
+    sources = [os.path.join(SRC_DIR, "cuda/wkv7h_cuda.cu"), os.path.join(SRC_DIR, "cuda/wkv7h_op.cpp")]
 
 load(
     name="wind_backstepping",
-    sources=[os.path.join(SRC_DIR, "cuda/wkv7_cuda.cu"), os.path.join(SRC_DIR, "cuda/wkv7_op.cpp")],
+    sources=sources,
     is_python_module=False,
     verbose=True,
     extra_cuda_cflags=[
@@ -42,7 +48,8 @@ class WindBackstepping(torch.autograd.Function):
     def forward(ctx, w, q, k, v, z, b):
         B, T, H, C = w.shape
         assert T % CHUNK_LEN == 0
-        assert all(i.dtype == torch.bfloat16 for i in [w, q, k, v, z, b])
+        dtype = torch.bfloat16 if PRECISION == "bf16" else torch.half
+        assert all(i.dtype == dtype for i in [w, q, k, v, z, b])
         assert all(i.is_contiguous() for i in [w, q, k, v, z, b])
         y = torch.empty_like(v)
         s = torch.empty(
@@ -55,7 +62,8 @@ class WindBackstepping(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, dy):
-        assert all(i.dtype == torch.bfloat16 for i in [dy])
+        dtype = torch.bfloat16 if PRECISION == "bf16" else torch.half
+        assert all(i.dtype == dtype for i in [dy])
         assert all(i.is_contiguous() for i in [dy])
         w, q, k, v, z, b, s, sa = ctx.saved_tensors
         dw, dq, dk, dv, dz, db = [torch.empty_like(x) for x in [w, q, k, v, z, b]]
