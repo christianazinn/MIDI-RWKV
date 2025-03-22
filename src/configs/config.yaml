@@ -11,11 +11,11 @@ run_name:
 
 trainer:
     gradient_clip_val: 1.0  # reduce it to 0.7 / 0.5 / 0.3 / 0.2 for problematic samples
-    max_epochs: 30
+    max_epochs: 30 # TODO update
 
     num_nodes: 1
     accelerator: "gpu"
-    devices: 1  # per node
+    devices: 1  # TODO update per node
     precision: "bf16"
     strategy: "deepspeed_stage_2"
 
@@ -39,17 +39,17 @@ model:
 training:
     epoch_save: 1  # save per epochs
     save_steps: 0  # save per steps
-    micro_bsz: 16  # bsz per GPU
+    micro_bsz: 2  # TODO modify on H100: bsz per GPU
 
     lr_schedule: "cosine"
-    layerwise_lr: 1  # layerwise for faster convergence, slower it/s
+    layerwise_lr: 1  # 1 = layerwise lr for faster convergence, slower it/s
     lr_init: 6e-4  # initial learning rate
     lr_final: 3e-5  # final learning rate
     warmup_steps: 20
 
     beta1: 0.9   # ZeRO betas
     beta2: 0.99  # ZeRO betas
-    ds_bucket_mb: 20  # ZeRO bucket size MB
+    ds_bucket_mb: 20  # TODO modify on H100: ZeRO bucket size MB
 
     weight_decay: 0.01  # try 0.1
     weight_decay_final: -1
@@ -58,11 +58,12 @@ training:
 
 # TODO: omegaconf does not support tuples very well
 data:
-    prefiltered_dataset_path: /home/christian/MIDI-RWKV/src/data/prefiltered
+    src_dir: /app # /home/christian/MIDI-RWKV/src
+    prefiltered_dataset_path: ${.src_dir}/data/prefiltered
+    tokenizer_path: ${.src_dir}/tokenizer/tokenizer_with_acs.json
+    # these should generally not be needed
     otherwise_train_data_path: /home/christian/MMM/data/GigaMIDI/all-instruments-with-drums/train.parquet
     otherwise_val_data_path: /home/christian/MMM/data/GigaMIDI/all-instruments-with-drums/validation.parquet
-    tokenizer_path: "/home/christian/MIDI-RWKV/src/tokenizer/tokenizer_with_acs.json"
-    src_dir: "/home/christian/MIDI-RWKV/src"
 
     max_seq_len: ${model.ctx_len}
     tracks_selection_random_ratio_range: # (0.4, 1)

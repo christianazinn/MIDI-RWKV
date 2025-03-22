@@ -2,4 +2,6 @@ torch
 pytorch-lightning==1.9.5
 deepspeed
 hydra-core
+datasets
 miditok
+wandb
