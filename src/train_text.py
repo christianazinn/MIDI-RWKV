@@ -94,18 +94,16 @@ def main(config):
     from argparse import Namespace
     from pytorch_lightning import Trainer
     from pytorch_lightning.utilities import rank_zero_info
-    import torch
     import pytorch_lightning as pl
 
-    config.trainer.devices = torch.cuda.device_count()
     args = Namespace(**OmegaConf.to_container(config.trainer, resolve=True))
 
     ########################################################################################################
 
     import os, warnings, datetime
     import numpy as np
+    import torch
     from torch.utils.data import DataLoader
-    from torch.utils.data.distributed import DistributedSampler
     import deepspeed
     from pytorch_lightning import seed_everything
 
@@ -121,8 +119,8 @@ def main(config):
     args.enable_checkpointing = False
     args.replace_sampler_ddp = False
     args.logger = False
-    # Trainer.my_wandb does not yet exist on sanity validation
     args.num_sanity_val_steps = 0
+    args.check_val_every_n_epoch = int(1e20)
     args.log_every_n_steps = int(1e20)
     config.betas = (config.training.beta1, config.training.beta2)
     config.real_bsz = int(args.num_nodes) * int(args.devices) * config.training.micro_bsz
@@ -134,7 +132,7 @@ def main(config):
     if config.model.dim_ffn <= 0:
         config.model.dim_ffn = int((config.model.n_embd * 3.5) // 32 * 32)
 
-    config.run_name = f"MIDI-RWKV ctx{config.model.ctx_len} L{config.model.n_layer} D{config.model.n_embd}"
+    config.run_name = f"{config.model.vocab_size} ctx{config.model.ctx_len} L{config.model.n_layer} D{config.model.n_embd}"
     if not os.path.exists(config.proj_dir):
         os.makedirs(config.proj_dir)
 
@@ -164,9 +162,9 @@ def main(config):
     if config.training.lr_final == 0 or config.training.lr_init == 0:
         rank_zero_info("\n\nNote: lr_final = 0 or lr_init = 0. Using linear LR schedule instead.\n\n")
 
-    assert config.trainer.precision in ["tf32", "16", "bf16"]
+    assert config.trainer.precision in ["tf32", "fp16", "bf16"]
     os.environ["RWKV_FLOAT_MODE"] = config.trainer.precision
-    if config.trainer.precision == "16":
+    if config.trainer.precision == "fp16":
         rank_zero_info("\n\nNote: you are using fp16 (might overflow). Try bf16 / tf32 for stable training.\n\n")
 
     torch.backends.cudnn.benchmark = True
@@ -176,7 +174,7 @@ def main(config):
 
     if "32" in config.trainer.precision:
         config.trainer.precision = 32
-    elif config.trainer.precision == "16":
+    elif config.trainer.precision == "fp16":
         config.trainer.precision = 16
     else:
         config.trainer.precision = "bf16"
@@ -188,59 +186,22 @@ def main(config):
     from trainer import train_callback, generate_init_weight
     from dataset import MIDIDataset, DataCollatorNoneFilter
     from datasets import load_dataset, load_from_disk
-    from miditok import MMM, TokenizerConfig
+    from transformers import AutoTokenizer
     from model import RWKV
+    config.model.vocab_size = 50256
+    config.model.ctx_len=512
+    config.model.n_layer=4
+    config.model.n_embd=256
+    config.training.micro_bsz=64
 
     # omegaconf tuple stuff
-    dc = config.data
-    tokenizer = MMM(params=dc.tokenizer_path)  # MMM(TokenizerConfig(**deepcopy(TOKENIZER_PARAMS)))
-    config.model.vocab_size = tokenizer.vocab_size
-    dc.tracks_selection_random_ratio_range = (0.4, 1)
-    dc.ratios_range_bar_infilling_duration = (0.1, 0.4)
-    dc.acs_random_ratio_range = (0.05, 0.9)
-    dc.tracks_idx_random_ratio_range = (0.1, 1)
-    dc.bars_idx_random_ratio_range = (0.1, 0.7)
-    dc.data_augmentation_offsets = (6, 2, 0) 
+    tokenizer = AutoTokenizer.from_pretrained("roneneldan/TinyStories-1M") 
+    train_data = load_dataset("roneneldan/TinyStories")
 
-    if not os.path.exists(dc.prefiltered_dataset_path):
-        ds = load_dataset("parquet", data_files={
-            "train": dc.otherwise_train_data_path,
-            "validation": dc.otherwise_val_data_path,
-        })
-        ds = ds.filter(
-            lambda ex: is_score_valid(
-                ex["music"], dc.min_num_bars_file_valid, dc.min_num_notes_file_valid
-            )
-        )
-        
-        # Save the filtered dataset
-        ds.save_to_disk(dc.prefiltered_dataset_path)
-        print("Filtered dataset saved to disk")
-    else:
-        ds = load_from_disk(dc.prefiltered_dataset_path)
+    def tokenize_function(examples):
+        return tokenizer(examples["text"], truncation=True, padding="max_length", max_length=config.model.ctx_len)
 
-    train_data = MIDIDataset(
-                ds["train"],
-                tokenizer,
-                dc.max_seq_len,
-                dc.tracks_selection_random_ratio_range,
-                dc.data_augmentation_offsets,
-                dc.ratio_bar_infilling,
-                dc.ratios_range_bar_infilling_duration,
-                ac_random_ratio_range=dc.acs_random_ratio_range,
-                ac_tracks_random_ratio_range=dc.tracks_idx_random_ratio_range,
-                ac_bars_random_ratio_range=dc.bars_idx_random_ratio_range)
-    val_data = MIDIDataset(
-                ds["validation"],
-                tokenizer,
-                dc.max_seq_len,
-                dc.tracks_selection_random_ratio_range,
-                dc.data_augmentation_offsets,
-                dc.ratio_bar_infilling,
-                dc.ratios_range_bar_infilling_duration,
-                ac_random_ratio_range=dc.acs_random_ratio_range,
-                ac_tracks_random_ratio_range=dc.tracks_idx_random_ratio_range,
-                ac_bars_random_ratio_range=dc.bars_idx_random_ratio_range)
+    train_data = train_data.map(tokenize_function, batched=True)
     model = RWKV(config)
 
     if len(config.load_model) == 0:  # shall we build the initial weights?
@@ -284,34 +245,12 @@ def main(config):
         trainer.strategy.config["zero_optimization"]["allgather_bucket_size"] = config.training.ds_bucket_mb * 1000 * 1000
         trainer.strategy.config["zero_optimization"]["reduce_bucket_size"] = config.training.ds_bucket_mb * 1000 * 1000
 
-    collator = DataCollatorNoneFilter(pad_token_id=tokenizer.pad_token_id, max_length=config.model.ctx_len)
-    train_sampler = DistributedSampler(
-        train_data,
-        num_replicas=trainer.world_size,
-        rank=trainer.global_rank,
-        shuffle=True  # Usually you want shuffling for training
-    )
-    val_sampler = DistributedSampler(
-        val_data,
-        num_replicas=trainer.world_size,
-        rank=trainer.global_rank,
-        shuffle=False  # No need to shuffle validation data
-    )
+    # collator = DataCollatorNoneFilter(pad_token_id=tokenizer.pad_token_id, max_length=config.model.ctx_len)
 
     # must set shuffle=False, persistent_workers=False (because worker is in another thread)
-    data_loader = DataLoader(train_data, sampler=train_sampler, pin_memory=True, batch_size=config.training.micro_bsz, num_workers=config.training.dataloader_num_workers, persistent_workers=False, drop_last=True, collate_fn=collator)
-    val_loader = DataLoader(val_data, sampler=val_sampler, pin_memory=True, batch_size=config.training.micro_bsz, num_workers=config.training.dataloader_num_workers, persistent_workers=False, drop_last=True, collate_fn=collator)
+    data_loader = DataLoader(train_data, shuffle=False, pin_memory=True, batch_size=config.training.micro_bsz, num_workers=config.training.dataloader_num_workers, persistent_workers=False, drop_last=True)#, collate_fn=collator)
 
-    try:
-        trainer.fit(model, data_loader, val_loader)
-    finally:
-        import requests
-        requests.post(f"https://ntfy.sh/{config.ntfy}", data=f"Training run complete: {config.run_name}".encode(encoding='utf-8'),
-        headers={
-            "Title": "Training complete",
-            "Priority": "urgent",
-            "Tags": "warning"
-        })
+    trainer.fit(model, data_loader)
 
 
 if __name__ == "__main__":

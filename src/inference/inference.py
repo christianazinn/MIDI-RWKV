@@ -301,7 +301,7 @@ def _adapt_prompt_for_bar_infilling(
     track_idx: int,
     tokens: list[TokSequence],
     subset_bars_to_infill: tuple[int, int, list[str]],
-    num_context_bars: int = 8,
+    num_context_bars: int = 4,
 ) -> TokSequence:
     """
     Construct the prompt for bar infilling.
@@ -410,7 +410,7 @@ if __name__ == "__main__":
     from pathlib import Path
     INFERENCE_CONFIG = InferenceConfig(
         {
-            2: [(14, 16, ["ACBarNoteDensity_6", "ACBarNoteDurationEight_1"])],
+            0: [(14, 16, ["ACBarNoteDensity_10"])],
         },
         [
         #     (43, ["ACBarPitchClass_3"]),
@@ -423,6 +423,7 @@ if __name__ == "__main__":
             top_k=20,
             top_p=0.95,
             max_new_tokens=300,
+            do_sample=True
         )
     
     current_dir = Path(__file__).absolute().parent
@@ -467,8 +468,8 @@ if __name__ == "__main__":
 
     # matplotlib
     from matplotlib import pyplot as plt
-    intrack = inscore.resample(tpq=6, min_dur=1).tracks[2].pianoroll(modes=["onset", "frame"], pitch_range=[0, 128], encode_velocity=False)
-    outtrack = outscore.resample(tpq=6, min_dur=1).tracks[2].pianoroll(modes=["onset", "frame"], pitch_range=[0, 128], encode_velocity=False)
+    intrack = inscore.resample(tpq=6, min_dur=1).tracks[0].pianoroll(modes=["onset", "frame"], pitch_range=[0, 128], encode_velocity=False)
+    outtrack = outscore.resample(tpq=6, min_dur=1).tracks[0].pianoroll(modes=["onset", "frame"], pitch_range=[0, 128], encode_velocity=False)
 
     intrack_truncated = [intrack[0][:, :500], intrack[1][:, :500]]
     outtrack_truncated = [outtrack[0][:, :500], outtrack[1][:, :500]]

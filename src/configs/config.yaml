@@ -1,6 +1,7 @@
 load_model: "" # "/home/christian/MIDI-RWKV/src/outputs/2025-03-20/GOOD/out/rwkv-21.pth"  # if continuing: full path with .pth
 wandb: "MIDI-RWKV"
 tensorboard: 1
+ntfy: "phantasmagoria"
 proj_dir: "out"
 random_seed: -1
 
@@ -17,7 +18,7 @@ trainer:
     num_nodes: 1
     accelerator: "gpu"
     devices:  # will be autoset
-    precision: "bf16"
+    precision: "bf16"  # MUST be "16" for V100
     strategy: "deepspeed_stage_2"
 
 model:

@@ -1,3 +1,4 @@
 outputs
 test.ipynb
 train_text.py
+train.sh
