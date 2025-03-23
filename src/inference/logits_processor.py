@@ -31,10 +31,14 @@ class StopLogitsProcessor(LogitsProcessor):
         self,
         bar_start_token_id: int,
         eos_token_id: int,
+        track_start_token_id: int,
+        track_end_token_id: int,
         tokenizer: miditok.MusicTokenizer,
     ) -> None:
         self.bar_start_token_id = bar_start_token_id
         self.eos_token_id = eos_token_id
+        self.track_start_token_id = track_start_token_id
+        self.track_end_token_id = track_end_token_id
         self.tokenizer = tokenizer
         self.total_time = 0
 
@@ -83,6 +87,10 @@ class StopLogitsProcessor(LogitsProcessor):
         # Don't sample an EOS token until all bars are generated
         if n_bar_none <= self.n_bars_to_infill:
             scores[:, self.eos_token_id] = -999999.0
+
+        # TODO: should not be able to sample TrackEnd/TrackStart!!!
+        # scores[:, self.track_start_token_id] = -999999.0
+        # scores[:, self.track_end_token_id] = -999999.0
 
         end_time = time.time()
         self.total_time += end_time - start_time

@@ -1,4 +1,4 @@
-load_model: "" # "/home/christian/MIDI-RWKV/src/outputs/2025-03-20/GOOD/out/rwkv-21.pth"  # if continuing: full path with .pth
+load_model: "/app/payload/rwkv-5.pth" # "/home/christian/MIDI-RWKV/src/outputs/2025-03-20/GOOD/out/rwkv-21.pth"  # if continuing: full path with .pth
 wandb: "MIDI-RWKV"
 tensorboard: 1
 ntfy: "phantasmagoria"
@@ -43,8 +43,8 @@ training:
     save_steps: 0  # save per steps
     micro_bsz: 4  # bsz per GPU
     # 16384/8 or 8192/16 on 80GB
-    # 8192/4 on 24GB
-    # 8192/2 @ FP16 (precision: "16") on 16GB V100
+    # 16384/2 or 8192/4 on 24GB
+    # 16384/1 or 8192/2 @ FP16 (precision: "16") on 16GB V100
 
     lr_schedule: "cosine"
     layerwise_lr: 1  # 1 = layerwise lr for faster convergence, slower it/s
@@ -64,7 +64,7 @@ training:
 # TODO: omegaconf does not support tuples very well
 data:
     # /app for docker
-    src_dir: /home/christian/MIDI-RWKV/src
+    src_dir: /app # /home/christian/MIDI-RWKV/src
     prefiltered_dataset_path: ${.src_dir}/data/prefiltered
     tokenizer_path: ${.src_dir}/tokenizer/tokenizer_with_acs.json
     # these should generally not be needed

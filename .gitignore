@@ -5,3 +5,4 @@ data/
 outputs/
 *.png
 *.wav
+payload/

@@ -47,7 +47,7 @@ def generate(
     )
 
     logits_processor = StopLogitsProcessor(
-        tokenizer.vocab["Bar_None"], tokenizer.vocab["FillBar_End"], tokenizer
+        tokenizer.vocab["Bar_None"], tokenizer.vocab["FillBar_End"], tokenizer.vocab["Track_Start"], tokenizer.vocab["Track_End"], tokenizer
     )
 
     # Infill bars
@@ -278,12 +278,15 @@ def infill_bars(
         )[0]
         # bar_none_token_idxs[-1] because we must exclude the last BarNone token,
         # which is used by the logits processor to stop generation
-        print(generated_tokens.ids)
         print(generated_tokens.tokens)
-        if len(bar_none_token_idxs > 0):
+        try:
             generated_tokens.ids = generated_tokens.ids[
-                bar_none_token_idxs[0] : bar_none_token_idxs[-1]
+                0 : bar_none_token_idxs[logits_processor.n_bars_to_infill]
             ]
+        except IndexError:
+            pass
+        print("------------------------------")
+        print(generated_tokens.tokens)
 
         tokenizer.decode_token_ids(tokens[track_idx])
         tokens[track_idx].ids[token_start_idx:token_end_idx] = generated_tokens.ids
@@ -301,7 +304,7 @@ def _adapt_prompt_for_bar_infilling(
     track_idx: int,
     tokens: list[TokSequence],
     subset_bars_to_infill: tuple[int, int, list[str]],
-    num_context_bars: int = 4,
+    num_context_bars: int = 2,
 ) -> TokSequence:
     """
     Construct the prompt for bar infilling.
@@ -399,6 +402,9 @@ def _adapt_prompt_for_bar_infilling(
     # with open("tokens.txt", "w") as file:
     #    for token in output_toksequence.tokens:
     #        file.write(token + "\n")
+        
+    print(len(output_toksequence))
+    print("------")
 
     return output_toksequence, token_idx_start, token_idx_end
 
@@ -408,9 +414,10 @@ if __name__ == "__main__":
     from transformers import GenerationConfig, AutoModelForCausalLM
     from symusic import Synthesizer, dump_wav
     from pathlib import Path
+    # THIS IS THE FLA IMPLEMENTATION - cpp is much faster, see that repo
     INFERENCE_CONFIG = InferenceConfig(
         {
-            0: [(14, 16, ["ACBarNoteDensity_10"])],
+            0: [(4, 5, [])],
         },
         [
         #     (43, ["ACBarPitchClass_3"]),
@@ -429,7 +436,7 @@ if __name__ == "__main__":
     current_dir = Path(__file__).absolute().parent
     TOK_PATH = current_dir.parent / "tokenizer/tokenizer_with_acs.json"
     MODEL_PATH = "../outputs/m2fla"
-    INPUT_PATH = str(current_dir / "mat/rollinggirlEDIT.mid")
+    INPUT_PATH = str(current_dir / "mat/input.mid")
     OUTPUT_PATH = str(current_dir / "mat/output.mid")
     OUTWAV_PATH = str(current_dir / "mat/output.wav")
     INWAV_PATH = str(current_dir / "mat/input.wav")
