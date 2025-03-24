@@ -189,7 +189,7 @@ def main(config):
     from dataset import MIDIDataset, DataCollatorNoneFilter
     from datasets import load_dataset, load_from_disk
     from miditok import MMM, TokenizerConfig
-    from model import RWKV
+    # from model import RWKV
 
     # omegaconf tuple stuff
     dc = config.data
@@ -202,22 +202,22 @@ def main(config):
     dc.bars_idx_random_ratio_range = (0.1, 0.7)
     dc.data_augmentation_offsets = (6, 2, 0) 
 
-    if not os.path.exists(dc.prefiltered_dataset_path):
-        ds = load_dataset("parquet", data_files={
-            "train": dc.otherwise_train_data_path,
-            "validation": dc.otherwise_val_data_path,
-        })
-        ds = ds.filter(
-            lambda ex: is_score_valid(
-                ex["music"], dc.min_num_bars_file_valid, dc.min_num_notes_file_valid
-            )
-        )
+    # if not os.path.exists(dc.prefiltered_dataset_path):
+    #     ds = load_dataset("Metacreation/GigaMIDI", "v1.0.0")
+    #     ds = ds.filter(
+    #         lambda ex: is_score_valid(
+    #             ex["music"], dc.min_num_bars_file_valid, dc.min_num_notes_file_valid
+    #         )
+    #     )
         
-        # Save the filtered dataset
-        ds.save_to_disk(dc.prefiltered_dataset_path)
-        print("Filtered dataset saved to disk")
-    else:
-        ds = load_from_disk(dc.prefiltered_dataset_path)
+    #     # Save the filtered dataset
+    #     ds.save_to_disk(dc.prefiltered_dataset_path)
+    #     print("Filtered dataset saved to disk")
+    # else:
+    #     ds = load_from_disk(dc.prefiltered_dataset_path)
+    ds = load_dataset("Metacreation/GigaMIDI", "v1.0.0", "all-instruments-with-drums")
+    print("\n\n\n\n\n\n\n\n\n\n\n\n\n")
+    print(tokenizer.attribute_controls)
 
     train_data = MIDIDataset(
                 ds["train"],
@@ -230,6 +230,16 @@ def main(config):
                 ac_random_ratio_range=dc.acs_random_ratio_range,
                 ac_tracks_random_ratio_range=dc.tracks_idx_random_ratio_range,
                 ac_bars_random_ratio_range=dc.bars_idx_random_ratio_range)
+    
+    ct_invalid = ct_valid = 0
+    pbar = tqdm(train_data, desc="Processing MIDI data", total=len(train_data))
+    pbar.set_postfix(invalid=ct_invalid)
+    for entry in pbar:
+        if entry["input_ids"] is None:
+            ct_invalid += 1
+            pbar.set_postfix(invalid=ct_invalid)
+    print(ct_invalid)
+    return
     val_data = MIDIDataset(
                 ds["validation"],
                 tokenizer,
