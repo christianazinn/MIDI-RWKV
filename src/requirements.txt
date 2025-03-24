@@ -5,3 +5,4 @@ hydra-core
 datasets
 miditok
 wandb
+tensorboard

@@ -1,4 +1,4 @@
-load_model: "/app/payload/rwkv-5.pth" # "/home/christian/MIDI-RWKV/src/outputs/2025-03-20/GOOD/out/rwkv-21.pth"  # if continuing: full path with .pth
+load_model: "" # "/home/christian/MIDI-RWKV/src/outputs/2025-03-20/GOOD/out/rwkv-21.pth"  # if continuing: full path with .pth
 wandb: "MIDI-RWKV"
 tensorboard: 1
 ntfy: "phantasmagoria"
@@ -64,7 +64,7 @@ training:
 # TODO: omegaconf does not support tuples very well
 data:
     # /app for docker
-    src_dir: /app # /home/christian/MIDI-RWKV/src
+    src_dir: /app
     prefiltered_dataset_path: ${.src_dir}/data/prefiltered
     tokenizer_path: ${.src_dir}/tokenizer/tokenizer_with_acs.json
     # these should generally not be needed
