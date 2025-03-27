@@ -289,13 +289,13 @@ def main(config):
         train_data,
         num_replicas=trainer.world_size,
         rank=trainer.global_rank,
-        shuffle=True  # Usually you want shuffling for training
+        shuffle=False
     )
     val_sampler = DistributedSampler(
         val_data,
         num_replicas=trainer.world_size,
         rank=trainer.global_rank,
-        shuffle=False  # No need to shuffle validation data
+        shuffle=False
     )
 
     # must set shuffle=False, persistent_workers=False (because worker is in another thread)
@@ -305,6 +305,12 @@ def main(config):
     try:
         trainer.fit(model, data_loader, val_loader)
     finally:
+        # should have had this a long time ago...
+        to_save_dict = model.state_dict()
+        torch.save(
+            to_save_dict,
+            f"{config.proj_dir}/rwkv-last.pth",
+        )
         import requests
         requests.post(f"https://ntfy.sh/{config.ntfy}", data=f"Training run complete: {config.run_name}".encode(encoding='utf-8'),
         headers={

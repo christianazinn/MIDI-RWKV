@@ -242,19 +242,22 @@ class MIDIDataset(DatasetMIDI):
         # we might want to catch them to fix them instead of skipping the iteration.
         try:
             score = Score.from_midi(self._dataset[idx]["music"])
-        except SCORE_LOADING_EXCEPTION:
+        except:
             return {self.sample_key_name: None, self.labels_key_name: None}
 
         # Tokenize the score
         try:
             inputs = self._tokenize_score(score)
-        except IndexError as e:
+        except:
             return {self.sample_key_name: None, self.labels_key_name: None}
         if inputs is None:
             return {self.sample_key_name: None, self.labels_key_name: None}
 
         # If not one_token_stream, we only take the first track/sequence
-        input_ids = inputs.ids if self.tokenizer.one_token_stream else inputs[0].ids
+        try:
+            input_ids = inputs.ids if self.tokenizer.one_token_stream else inputs[0].ids
+        except:
+            return {self.sample_key_name: None, self.labels_key_name: None}
 
         item = {self.sample_key_name: LongTensor(input_ids[:-1]), self.labels_key_name: LongTensor(input_ids[1:])}
 
@@ -730,16 +733,18 @@ class MIDIDataset(DatasetMIDI):
 
         tokseq = concat_tokseq(sequences)
         # No need to call self._preprocess_token_ids as there are no BOS/EOS tokens and
-        # that the sequence le  ngth does not exceed the limit as handled above.
+        # that the sequence length does not exceed the limit as handled above.
+        if type(tokseq) is tuple:
+            return tokseq[0] if (len(tokseq) > 0 and type(tokseq[0]) is TokSequence) else None
 
-        self.tokenizer.decode_token_ids(tokseq)
+        # self.tokenizer.decode_token_ids(tokseq)
 
-        tokseq_tokens = self.tokenizer._ids_to_tokens(tokseq)
+        # tokseq_tokens = self.tokenizer._ids_to_tokens(tokseq)
 
-        if debug:
-            with open("output.txt", "w") as file:
-                for item in tokseq_tokens:
-                    file.write(str(item) + "\n")
+        # if debug:
+        #     with open("output.txt", "w") as file:
+        #         for item in tokseq_tokens:
+        #             file.write(str(item) + "\n")
 
         return tokseq
 
