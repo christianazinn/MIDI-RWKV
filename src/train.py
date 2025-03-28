@@ -289,7 +289,7 @@ def main(config):
         train_data,
         num_replicas=trainer.world_size,
         rank=trainer.global_rank,
-        shuffle=False
+        shuffle=True
     )
     val_sampler = DistributedSampler(
         val_data,

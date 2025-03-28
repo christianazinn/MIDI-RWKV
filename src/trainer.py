@@ -112,8 +112,8 @@ class train_callback(pl.Callback):
             try:
                 t_cost = (t_now - trainer.my_time_ns) / 1e9
                 kt_s = token_per_step / t_cost / 1000
-                self.log("REAL it/s", 1.0 / t_cost, prog_bar=True, on_step=True)
-                self.log("Kt/s", kt_s, prog_bar=True, on_step=True)
+                self.log("REAL it/s", 1.0 / t_cost, prog_bar=True, on_step=True, rank_zero_only=True)
+                self.log("Kt/s", kt_s, prog_bar=True, on_step=True, rank_zero_only=True)
             except:
                 pass
                 
@@ -126,8 +126,8 @@ class train_callback(pl.Callback):
             trainer.my_epoch_loss = trainer.my_loss_sum / trainer.my_loss_count
             
             # Standard logging
-            self.log("lr", trainer.my_lr, prog_bar=True, on_step=True)
-            self.log("loss", trainer.my_epoch_loss, prog_bar=True, on_step=True)
+            self.log("lr", trainer.my_lr, prog_bar=True, on_step=True, rank_zero_only=True)
+            self.log("loss", trainer.my_epoch_loss, prog_bar=True, on_step=True, rank_zero_only=True)
 
             # Log to tensorboard if configured
             if self.config.tensorboard and hasattr(trainer, 'my_tb_logger'):
@@ -147,7 +147,7 @@ class train_callback(pl.Callback):
                 }
                 if kt_s > 0:
                     lll["kt/s"] = kt_s
-                trainer.my_wandb.log(lll, step=trainer.global_step)
+                trainer.my_wandb.log(lll, step=trainer.global_step, rank_zero_only=True)
                 
         # Save checkpoint at specific step if configured
         is_save_step = self.save_steps > 0 and trainer.global_step % self.save_steps == 0
@@ -211,8 +211,8 @@ class train_callback(pl.Callback):
             val_ppl = math.exp(val_epoch_loss)
             
             # Log validation metrics
-            self.log("val_loss", val_epoch_loss, prog_bar=True, on_epoch=True, sync_dist=True)
-            self.log("val_ppl", val_ppl, prog_bar=True, on_epoch=True, sync_dist=True)
+            self.log("val_loss", val_epoch_loss, prog_bar=True, on_epoch=True, sync_dist=True, rank_zero_only=True)
+            self.log("val_ppl", val_ppl, prog_bar=True, on_epoch=True, sync_dist=True, rank_zero_only=True)
             
             # Log to tensorboard if configured
             if self.config.tensorboard and hasattr(trainer, 'my_tb_logger'):
@@ -224,7 +224,7 @@ class train_callback(pl.Callback):
                 trainer.my_wandb.log({
                     "val_loss": val_epoch_loss,
                     "val_ppl": val_ppl
-                }, step=trainer.global_step)
+                }, step=trainer.global_step, rank_zero_only=True)
             
             # Log to file
             trainer.my_log.write(f"Validation Epoch {trainer.current_epoch}: " +
