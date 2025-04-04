@@ -46,14 +46,19 @@ export NCCL_DEBUG=WARN
 # best explanation: https://stackoverflow.com/questions/62691279/how-to-disable-tokenizers-parallelism-true-false-warning/72926996#72926996
 export TOKENIZERS_PARALLELISM=0
 
+echo "Starting venv"
+# Load the python environment
+module load python/3.11 scipy-stack/2025a gcc arrow/17.0.0 cudacore/.12.6.2 cudacompat/.12.6 
+virtualenv --no-download $SLURM_TMPDIR/env
+source $SLURM_TMPDIR/env/bin/activate
+pip install --no-index --upgrade pip
+pip install --no-index -r requirements.txt
+pip install --upgrade miditok
+
 # Move hugging face dataset from scratch to local file system
 # This is done on every nodes.
 # Docs: https://docs.alliancecan.ca/wiki/Using_node-local_storage
-srun --ntasks=$SLURM_NNODES --ntasks-per-node=1 bash -c "mkdir $SLURM_TMPDIR/data && cp -r $SCRATCH/data/GigaMIDI $SLURM_TMPDIR/data/"
-
-# Load the python environment
-module load gcc arrow/17.0.0 cudacore/.12.6.2 cudacompat/.12.6 # needed since arrow can't be installed in the venv via pip
-source .venv/bin/activate
+srun --ntasks=$SLURM_NNODES --ntasks-per-node=1 bash -c "mkdir $SLURM_TMPDIR/data && cp -r $SCRATCH/prefiltered $SLURM_TMPDIR/data/"
 
 module list
 
@@ -62,6 +67,6 @@ echo "Path to CUDA core is $CUDA_CORE"
 # Run the training
 # Tensorboard can be access by running (with computenode replaced with the node hostname):
 # ssh -N -f -L localhost:6006:computenode:6006 userid@cedar.computecanada.ca
-tensorboard --logdir=outputs --host 0.0.0.0 --load_fast false & srun --jobid "$SLURM_JOBID" bash -c "python src/train.py"
+tensorboard --logdir=outputs --host 0.0.0.0 --load_fast false & srun --jobid "$SLURM_JOBID" bash -c "python train.py"
 
 echo "END TIME: $(date)"

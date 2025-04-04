@@ -99,13 +99,14 @@ def main(config):
     import pytorch_lightning as pl
 
     config.data.src_dir = os.path.dirname(os.path.abspath(__file__))
+    config.data.prefiltered_dataset_path = os.path.join(os.getenv("SLURM_TMPDIR"), "data/prefiltered")
 
     config.trainer.devices = torch.cuda.device_count()
     args = Namespace(**OmegaConf.to_container(config.trainer, resolve=True))
 
     ########################################################################################################
 
-    import os, warnings, datetime
+    import warnings, datetime
     import numpy as np
     from torch.utils.data import DataLoader
     from torch.utils.data.distributed import DistributedSampler
