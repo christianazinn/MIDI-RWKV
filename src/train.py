@@ -9,6 +9,7 @@ from pathlib import Path
 from tqdm import tqdm
 import logging
 from omegaconf import OmegaConf
+import os
 import hydra
 logging.basicConfig(level=logging.INFO)
 
@@ -96,6 +97,8 @@ def main(config):
     from pytorch_lightning.utilities import rank_zero_info
     import torch
     import pytorch_lightning as pl
+
+    config.data.src_dir = os.path.dirname(os.path.abspath(__file__))
 
     config.trainer.devices = torch.cuda.device_count()
     args = Namespace(**OmegaConf.to_container(config.trainer, resolve=True))
@@ -204,6 +207,7 @@ def main(config):
 
     if not os.path.exists(dc.prefiltered_dataset_path):
         ds = load_dataset("parquet", data_files={
+            # TODO scratch
             "train": dc.otherwise_train_data_path,
             "validation": dc.otherwise_val_data_path,
         })
