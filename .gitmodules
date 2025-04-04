@@ -4,3 +4,6 @@
 [submodule "flash-linear-attention"]
 	path = flash-linear-attention
 	url = https://github.com/fla-org/flash-linear-attention.git
+[submodule "MIDIMetrics"]
+	path = MIDIMetrics
+	url = git@github.com:christianazinn/MIDIMetrics.git

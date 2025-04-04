@@ -273,6 +273,8 @@ def infill_bars(
         ].tolist()
         # decode_token_ids doesn't support numpy arrays for ids list
         tokenizer.decode_token_ids(generated_tokens)
+        if generated_tokens.ids[0] != tokenizer.vocab["Bar_None"]:
+            generated_tokens.ids.insert(0, tokenizer.vocab["Bar_None"])
         bar_none_token_idxs = np.where(
             np.array(generated_tokens.ids) == tokenizer.vocab["Bar_None"]
         )[0]
@@ -417,7 +419,7 @@ if __name__ == "__main__":
     # THIS IS THE FLA IMPLEMENTATION - cpp is much faster, see that repo
     INFERENCE_CONFIG = InferenceConfig(
         {
-            0: [(4, 5, [])],
+            0: [(14, 16, ['ACBarOnsetPolyphonyMin_1', 'ACBarOnsetPolyphonyMax_3', 'ACBarNoteDensity_8', 'ACBarNoteDurationWhole_0', 'ACBarNoteDurationHalf_0', 'ACBarNoteDurationQuarter_1', 'ACBarNoteDurationEight_1', 'ACBarNoteDurationSixteenth_1'])],
         },
         [
         #     (43, ["ACBarPitchClass_3"]),
@@ -429,20 +431,24 @@ if __name__ == "__main__":
             repetition_penalty=1.2,
             top_k=20,
             top_p=0.95,
-            max_new_tokens=300,
+            max_new_tokens=1500,
             do_sample=True
         )
     
+    use_fla = True
+
     current_dir = Path(__file__).absolute().parent
     TOK_PATH = current_dir.parent / "tokenizer/tokenizer_with_acs.json"
-    MODEL_PATH = "../outputs/m2fla"
-    INPUT_PATH = str(current_dir / "mat/input.mid")
+    MODEL_PATH = f"../outputs/{'fla_old' if use_fla else 'gpt2'}/checkpoint-epoch-1" # "../outputs/m2fla"
+    INPUT_PATH = str(current_dir / "mat/rollinggirlMELODYONLY.mid")
     OUTPUT_PATH = str(current_dir / "mat/output.mid")
     OUTWAV_PATH = str(current_dir / "mat/output.wav")
     INWAV_PATH = str(current_dir / "mat/input.wav")
     OUTPR_PATH = str(current_dir / "mat/output.png")
     INPR_PATH = str(current_dir / "mat/input.png")
     
+    # MODEL_PATH = "../outputs/m2fla"
+
     tokenizer = MMM(params=TOK_PATH)
     model = AutoModelForCausalLM.from_pretrained(MODEL_PATH).to("cuda")
 

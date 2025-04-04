@@ -1,4 +1,4 @@
-load_model: "" # "/home/christian/MIDI-RWKV/src/outputs/2025-03-20/GOOD/out/rwkv-21.pth"  # if continuing: full path with .pth
+load_model: "" # "/home/christian/MIDI-RWKV/src/outputs/8192_oldcont/17-38-11/out/rwkv-4.pth"  # if continuing: full path with .pth
 wandb: "MIDI-RWKV"
 tensorboard: 1
 ntfy: "phantasmagoria"
@@ -18,7 +18,7 @@ trainer:
     num_nodes: 1
     accelerator: "gpu"
     devices:  # will be autoset
-    precision: "bf16"  # MUST be "16" for V100
+    precision: "16"  # MUST be "16" for V100
     strategy: "deepspeed_stage_2"
 
 model:
@@ -46,25 +46,25 @@ training:
     # 16384/2 or 8192/4 on 24GB
     # 16384/1 or 8192/2 @ FP16 (precision: "16") on 16GB V100
 
-    lr_schedule: "cosine"
+    lr_schedule: # linear
     layerwise_lr: 1  # 1 = layerwise lr for faster convergence, slower it/s
-    lr_init: 6e-4  # initial learning rate
-    lr_final: 3e-5  # final learning rate
+    lr_init: 1e-4  # initial learning rate
+    lr_final: 1e-4  # final learning rate
     warmup_steps: 20
 
     beta1: 0.9   # ZeRO betas
     beta2: 0.99  # ZeRO betas
     ds_bucket_mb: 200  # ZeRO bucket size MB
 
-    weight_decay: 0.01  # try 0.1
+    weight_decay: 0.1
     weight_decay_final: -1
 
-    dataloader_num_workers: 8
+    dataloader_num_workers: 16
 
 # TODO: omegaconf does not support tuples very well
 data:
     # /app for docker
-    src_dir: /app
+    src_dir: /home/christian/MIDI-RWKV/src
     prefiltered_dataset_path: ${.src_dir}/data/prefiltered
     tokenizer_path: ${.src_dir}/tokenizer/tokenizer_with_acs.json
     # these should generally not be needed

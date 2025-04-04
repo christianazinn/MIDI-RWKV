@@ -147,7 +147,7 @@ class train_callback(pl.Callback):
                 }
                 if kt_s > 0:
                     lll["kt/s"] = kt_s
-                trainer.my_wandb.log(lll, step=trainer.global_step, rank_zero_only=True)
+                trainer.my_wandb.log(lll, step=trainer.global_step)# , rank_zero_only=True)
                 
         # Save checkpoint at specific step if configured
         is_save_step = self.save_steps > 0 and trainer.global_step % self.save_steps == 0
@@ -224,7 +224,7 @@ class train_callback(pl.Callback):
                 trainer.my_wandb.log({
                     "val_loss": val_epoch_loss,
                     "val_ppl": val_ppl
-                }, step=trainer.global_step, rank_zero_only=True)
+                }, step=trainer.global_step)# , rank_zero_only=True)
             
             # Log to file
             trainer.my_log.write(f"Validation Epoch {trainer.current_epoch}: " +
