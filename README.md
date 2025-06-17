@@ -1,6 +1,6 @@
 # MIDI-RWKV
 
-This repository is the official implementation of MIDI-RWKV.
+This repository is the official implementation of [Personalizable Long-Context Symbolic Music Infilling with MIDI-RWKV](https://arxiv.org/abs/2506.13001).
 
 ## What's inside
 
@@ -103,4 +103,15 @@ The listening test examples for Tables 5-6 were created with `MIDIMetrics/tests/
 
 If you found this work useful, please cite:
 
-TODO
+```
+@misc{zhouzheng2025personalizable,
+  title={Personalizable Long-Context Symbolic Music Infilling with MIDI-RWKV},
+  author={Christian Zhou-Zheng and Philippe Pasquier},
+  year={2025},
+  eprint={2506.13001},
+  archivePrefix={arXiv},
+  primaryClass={cs.SD},
+  url={https://arxiv.org/abs/2506.13001},
+  doi={10.48550/arXiv.2506.13001}
+}
+```
